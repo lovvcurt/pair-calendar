@@ -340,3 +340,10 @@ input[type=checkbox], input[type=radio] { width: 15px; height: 15px; accent-colo
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; } }
 @media (max-width: 800px) { .update-banner { margin-inline: 20px; } }
 @media (max-width: 600px) { .update-banner { margin-inline: 13px; } }
+
+/* Keep the event editor usable on narrow screens and while the mobile keyboard is open. */
+@media (max-width: 600px) {
+  .dialog-mobile-full-height { height: 92dvh; }
+  .dialog-mobile-full-height > .dialog-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .event-time-grid { grid-template-columns: minmax(0, 1fr); }
+}

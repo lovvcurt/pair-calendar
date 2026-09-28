@@ -61,14 +61,14 @@ function Notice({ notice, dismiss }: { notice: { text: string; kind: 'success' |
   return <div className={`notice notice-${notice.kind}`} role="status"><span>{notice.text}</span><button className="icon-button" aria-label="Закрыть" onClick={dismiss}><X size={16} /></button></div>;
 }
 
-function Dialog({ title, children, close, wide = false }: { title: string; children: ReactNode; close: () => void; wide?: boolean }) {
+function Dialog({ title, children, close, wide = false, mobileFullHeight = false }: { title: string; children: ReactNode; close: () => void; wide?: boolean; mobileFullHeight?: boolean }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
     window.addEventListener('keydown', onKey); document.body.classList.add('dialog-open');
     return () => { window.removeEventListener('keydown', onKey); document.body.classList.remove('dialog-open'); };
   }, [close]);
   return <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
-    <section className={`dialog ${wide ? 'dialog-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+    <section className={`dialog ${wide ? 'dialog-wide' : ''} ${mobileFullHeight ? 'dialog-mobile-full-height' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
       <header className="dialog-header"><h2>{title}</h2><button className="icon-button" aria-label="Закрыть" onClick={close}><X size={20} /></button></header>
       <div className="dialog-body">{children}</div>
     </section>
@@ -531,7 +531,7 @@ function EventDialog({ event, date, userId, tags, onClose, onSave, onDelete, onE
     setSaving(true); try { await onDelete(event); } catch (cause) { onError(errorMessage(cause)); } finally { setSaving(false); }
   }
 
-  return <Dialog title={editable ? event ? 'Изменить событие' : 'Новое событие' : displayTitle} close={onClose} wide>
+  return <Dialog title={editable ? event ? 'Изменить событие' : 'Новое событие' : displayTitle} close={onClose} wide mobileFullHeight>
     {event && !editable ? <div className="event-readonly">
       <div className="readonly-banner"><span className="small-icon mint">{hiddenBySurprise ? <Sparkles size={16} /> : <Clock3 size={16} />}</span><div><b>{displayTitle}</b><small>{event.all_day ? 'Весь день' : `${formatTime(event.starts_at)} – ${formatTime(event.ends_at)}`} · {formatDate(event.starts_at)}</small></div></div>
       {detailsAvailable && !hiddenBySurprise && <><p>{event.details?.description || 'Описание не добавлено.'}</p>{event.details?.place && <div className="location-line"><MapPin size={16} /><span>{event.details.place}{event.details.address ? ` · ${event.details.address}` : ''}</span></div>}{event.details?.latitude !== null && event.details?.longitude !== null && event.details?.latitude !== undefined && event.details?.longitude !== undefined && <a className="text-button" href={`https://www.google.com/maps?q=${event.details.latitude},${event.details.longitude}`} target="_blank" rel="noreferrer"><Compass size={15} /> Открыть на карте</a>}{Boolean(event.details?.tags.length) && <div className="tag-list">{event.details?.tags.map((tag) => <span className="tag-chip" key={tag}>{tag}</span>)}</div>}</>}
@@ -541,14 +541,14 @@ function EventDialog({ event, date, userId, tags, onClose, onSave, onDelete, onE
       <div className="dialog-actions"><button className="button button-secondary" onClick={onClose}>Закрыть</button></div>
     </div> : <form className="event-form" onSubmit={submit}>
       {event && <div className="event-author-line"><span className="small-icon mint"><Users size={15} /></span>Создал(а): {event.ownerName}{event.isOccurrence && <small>Повторяющееся событие: правка относится ко всей серии.</small>}</div>}
-      <div className="form-grid"><Field label="Название"><input autoFocus={!event} value={details.title} maxLength={160} onChange={(e) => updateDetails('title', e.target.value)} required /></Field><Field label="Категория"><select value={details.category} onChange={(e) => updateDetails('category', e.target.value)}>{['Свидание', 'Путешествие', 'Семья', 'Здоровье', 'Дела', 'Другое'].map((value) => <option key={value}>{value}</option>)}</select></Field></div>
+      <div className="form-grid"><Field label="Название"><input value={details.title} maxLength={160} onChange={(e) => updateDetails('title', e.target.value)} required /></Field><Field label="Категория"><select value={details.category} onChange={(e) => updateDetails('category', e.target.value)}>{['Свидание', 'Путешествие', 'Семья', 'Здоровье', 'Дела', 'Другое'].map((value) => <option key={value}>{value}</option>)}</select></Field></div>
       <Field label="Описание"><textarea value={details.description} rows={3} maxLength={4000} onChange={(e) => updateDetails('description', e.target.value)} placeholder="Что важно помнить?" /></Field>
       <label className="check-row all-day-check"><input type="checkbox" checked={allDay} onChange={(e) => {
         if (e.target.checked) { const asDate = starts.slice(0, 10); setStarts(asDate); setEnds(ends.slice(0, 10)); }
         else { const day = starts.slice(0, 10); setStarts(`${day}T09:00`); setEnds(`${day}T10:00`); }
         setAllDay(e.target.checked);
       }} /><span>Событие на весь день</span></label>
-      <div className="form-grid"><Field label="Начало"><input type={allDay ? 'date' : 'datetime-local'} value={starts} onChange={(e) => setStarts(e.target.value)} required /></Field><Field label={allDay ? 'Последний день' : 'Окончание'}><input type={allDay ? 'date' : 'datetime-local'} value={ends} onChange={(e) => setEnds(e.target.value)} required /></Field></div>
+      <div className="form-grid event-time-grid"><Field label="Начало"><input type={allDay ? 'date' : 'datetime-local'} value={starts} onChange={(e) => setStarts(e.target.value)} required /></Field><Field label={allDay ? 'Последний день' : 'Окончание'}><input type={allDay ? 'date' : 'datetime-local'} value={ends} onChange={(e) => setEnds(e.target.value)} required /></Field></div>
       <div className="form-grid"><Field label="Место"><input value={details.place} maxLength={160} onChange={(e) => updateDetails('place', e.target.value)} placeholder="Кафе, парк…" /></Field><Field label="Адрес"><input value={details.address} maxLength={240} onChange={(e) => updateDetails('address', e.target.value)} placeholder="Улица и город" /></Field></div>
       <div className="form-grid coordinates-grid"><Field label="Широта"><input type="number" step="any" min="-90" max="90" value={details.latitude ?? ''} onChange={(e) => updateDetails('latitude', e.target.value === '' ? null : Number(e.target.value))} placeholder="52.2297" /></Field><Field label="Долгота"><input type="number" step="any" min="-180" max="180" value={details.longitude ?? ''} onChange={(e) => updateDetails('longitude', e.target.value === '' ? null : Number(e.target.value))} placeholder="21.0122" /></Field><small>Координаты можно скопировать из карты.</small></div>
       <div className="form-grid color-recurrence-grid"><Field label="Цвет"><div className="color-options">{colorOptions.map((color) => <button type="button" aria-label={`Цвет ${color}`} key={color} className={`color-option ${details.color === color ? 'chosen' : ''}`} style={{ backgroundColor: color }} onClick={() => updateDetails('color', color)} />)}<input className="custom-color" type="color" value={details.color} aria-label="Другой цвет" onChange={(e) => updateDetails('color', e.target.value)} /></div></Field><Field label="Повторение"><select value={recurrence ?? ''} onChange={(e) => setRecurrence((e.target.value || null) as CalendarEvent['recurrence_frequency'])}><option value="">Не повторять</option><option value="daily">Каждый день</option><option value="weekly">Каждую неделю</option><option value="monthly">Каждый месяц</option><option value="yearly">Каждый год</option></select></Field></div>
