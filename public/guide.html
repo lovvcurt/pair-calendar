@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#111312"><title>Настройка — Вместе</title>
+  <style>
+    :root{color-scheme:dark;--bg:#111312;--card:#181b19;--line:#2b302d;--text:#f0f2ef;--muted:#a4ada7;--mint:#a6e3b0}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{width:min(850px,100% - 32px);margin:0 auto;padding:40px 0 80px}a{color:var(--mint)}h1,h2,h3{line-height:1.25;letter-spacing:-.04em}h1{font-size:clamp(30px,6vw,44px)}h2{margin-top:42px;padding-top:20px;border-top:1px solid var(--line);font-size:25px}p,li{color:var(--muted)}.card{padding:18px 20px;border:1px solid var(--line);border-radius:16px;background:var(--card)}.pill{display:inline-block;padding:2px 9px;border:1px solid var(--line);border-radius:20px;color:var(--mint);font-size:12px}code{padding:2px 5px;border-radius:5px;background:#202522;color:var(--mint);font-size:.9em}pre{overflow:auto;padding:14px;border:1px solid var(--line);border-radius:12px;background:#0c0e0d;color:var(--mint);font-size:13px}table{width:100%;border-collapse:collapse}td,th{padding:9px;border-bottom:1px solid var(--line);text-align:left}small{color:var(--muted)}.warn{border-left:3px solid #e9bd7a;padding-left:14px}
+  </style>
+</head>
+<body><main>
+  <a href="./">← Вернуться в «Вместе»</a>
+  <p><span class="pill">РУКОВОДСТВО ДЛЯ НАЧИНАЮЩИХ</span></p>
+  <h1>Настройка приложения «Вместе»</h1>
+  <p>Приложение хранит аккаунты и календарь в Supabase. Для работы сайта создайте свой Supabase-проект и добавьте его публичный ключ в настройки сборки. Пароли и серверные секреты остаются только у вас.</p>
+  <div class="card"><b>Важно о ключах</b><p>Браузеру нужен только URL проекта и ключ <b>Publishable</b>, который обычно начинается с <code>sb_publishable_</code>. Он по назначению виден посетителям сайта. Ключ <b>Secret</b> / <b>service_role</b> обходит политики безопасности и никогда не должен попасть в сайт, GitHub Pages, файл .env этого приложения или чат.</p></div>
+
+  <h2>1. Создайте проект Supabase</h2>
+  <ol><li>Создайте аккаунт на <a href="https://supabase.com/dashboard">supabase.com/dashboard</a> и нажмите <b>New project</b>.</li><li>Введите имя проекта, задайте пароль базы и сохраните его в менеджере паролей. Выберите ближайший регион и дождитесь создания.</li><li>В проекте откройте <b>SQL Editor → New query</b>.</li><li>В репозитории откройте файл <code>supabase/migrations/20260928000000_initial.sql</code>, скопируйте его целиком в окно SQL Editor и нажмите <b>Run</b>. Миграция создаёт таблицы, правила доступа, приватный Storage и Realtime.</li><li>В <b>Storage → Buckets</b> проверьте, что появился bucket <code>avatars</code> и он имеет доступ <b>Private</b>. Не включайте Public.</li></ol>
+  <p>Не отключайте RLS и не добавляйте публичные правила. Миграцию применяют один раз к пустому проекту.</p>
+
+  <h2>2. Включите подтверждение почты</h2>
+  <ol><li>Откройте <b>Authentication</b> и проверьте настройки провайдера <b>Email</b>: регистрация пользователей разрешена, включено <b>Confirm email</b>.</li><li>Откройте <b>Authentication → URL Configuration</b>. В поле <b>Site URL</b> укажите адрес опубликованного сайта. Для проектной страницы он содержит имя репозитория: <code>https://ЛОГИН.github.io/РЕПОЗИТОРИЙ/</code>.</li><li>В <b>Redirect URLs</b> добавьте локальный и опубликованный адреса, например <code>http://localhost:5173/**</code> и <code>https://ЛОГИН.github.io/РЕПОЗИТОРИЙ/**</code>. Сохраните изменения.</li><li>Для реальной доставки писем настройте собственный SMTP в <b>Authentication → Emails → SMTP Settings</b> или соответствующем пункте <b>Custom SMTP</b>. Тестовая отправка Supabase ограничена. SMTP-пароль храните в Supabase, не в репозитории. См. <a href="https://supabase.com/docs/guides/auth/auth-smtp">официальное руководство SMTP</a>.</li></ol>
+
+  <h2>3. Запустите на компьютере</h2>
+  <p>Установите <a href="https://nodejs.org/">Node.js LTS</a> и Git. Откройте PowerShell в каталоге проекта и скопируйте файл примера:</p>
+  <pre>Copy-Item .env.example .env
+notepad .env</pre>
+  <p>В Supabase откройте <b>Connect</b> или <b>Project Settings → API Keys</b> и скопируйте <b>Project URL</b> и <b>Publishable key</b>. Заполните файл .env так:</p>
+  <pre>VITE_SUPABASE_URL=https://ваш-проект.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_ваш-ключ</pre>
+  <p>Сохраните .env и выполните команды:</p><pre>npm install
+npm run dev</pre><p>Откройте адрес, который покажет терминал, обычно <code>http://localhost:5173</code>. Без значений Supabase приложение выводит экран настройки и не выдаёт локальные данные за облачные.</p>
+
+  <h2>4. Создайте календарь и пригласите партнёра</h2>
+  <p>Зарегистрируйтесь с рабочим email и подтвердите его ссылкой из письма. Первый пользователь нажимает <b>Создать календарь</b>, затем в настройках выбирает <b>Создать одноразовую ссылку</b>. Отправьте её партнёру. Партнёр создаёт отдельный аккаунт и принимает приглашение. Ссылка случайная, действует 7 дней и принимается один раз.</p>
+
+  <h2>5. Опубликуйте на GitHub Pages</h2>
+  <ol><li>Создайте аккаунт GitHub, репозиторий и отправьте в него файлы проекта. Основная ветка по умолчанию — <code>main</code>.</li><li>Откройте репозиторий <b>Settings → Secrets and variables → Actions → Variables</b>. Через <b>New repository variable</b> добавьте <code>VITE_SUPABASE_URL</code> и <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>.</li><li>Откройте <b>Settings → Pages</b> и в разделе <b>Build and deployment</b> выберите <b>Source: GitHub Actions</b>.</li><li>Перейдите во вкладку <b>Actions</b> и дождитесь успешного workflow <b>Deploy PWA to GitHub Pages</b>. Адрес появится в Settings → Pages.</li><li>Добавьте production-адрес Pages в Supabase <b>Authentication → URL Configuration → Redirect URLs</b>.</li></ol>
+  <p>Значения Variables видны в публичной сборке, поэтому храните там только URL и Publishable key. Workflow сам выбирает путь для сайта в корне и для адреса с именем репозитория. Подробнее: <a href="https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages">GitHub Pages с Actions</a>.</p>
+
+  <h2>Приватность</h2>
+  <p>Политики PostgreSQL RLS применяются при запросе из интерфейса и при Realtime-подписке. Для уровня «Личное» партнёр не получает даже строку времени. Для «Только занятое время» база отдаёт ему только время и признак занятости; имя, описание, место, координаты, теги и напоминания лежат отдельно в таблице, недоступной по его политике. Подробности сюрприза база разрешает читать после срока раскрытия.</p>
+  <p>Владельцем личной записи остаётся её автор. При параллельном редактировании версия записи проверяется, устаревшая правка вернёт ошибку и не перезапишет более новую. Не меняйте настройки RLS ради упрощения работы интерфейса. Дополнительно: <a href="https://supabase.com/docs/guides/database/postgres/row-level-security">Supabase Row Level Security</a>.</p>
+
+  <h2>Установка на телефон и работа без интернета</h2>
+  <ul><li><b>Android:</b> Chrome → меню ⋮ → «Установить приложение» или «Добавить на главный экран».</li><li><b>iPhone:</b> Safari → «Поделиться» → «На экран Домой» → «Добавить».</li></ul>
+  <p>Сайт должен быть открыт по HTTPS. Service worker кеширует оболочку приложения, но не ответы Supabase. Для обновления интерфейса обновите страницу после выпуска новой версии. Данные без интернета не редактируются и не синхронизируются позже.</p>
+
+  <h2>Напоминания и .ics</h2>
+  <p>Откройте в приложении <b>Настройки → Напоминания → Запросить разрешение</b>. Таймер работает, пока приложение открыто и браузер не приостановил вкладку. Push-уведомления при закрытом приложении требуют дополнительной настройки VAPID, таблицы подписок с RLS, обработчика service worker и защищённого Supabase Edge Function/планировщика. Эти push в проекте не настроены.</p>
+  <p>В <b>Настройки → Импорт .ics</b> выберите файл, изучите предварительный просмотр и подтвердите. В <b>Экспорт .ics</b> задайте период и классы событий. Это перенос копии, не двусторонняя синхронизация системного календаря.</p>
+
+  <h2>Если что-то не работает</h2>
+  <ul><li>Экран «Подключите Supabase»: проверьте написание URL и переменных, затем перезапустите npm run dev.</li><li>Письмо не приходит: проверьте Redirect URLs, папку «Спам» и SMTP.</li><li>RLS error: примените всю миграцию и проверьте членство двух аккаунтов в одном календаре.</li><li>Нет синхронизации: проверьте интернет и Realtime в Project Settings → Realtime.</li><li>404 GitHub Pages: проверьте Source: GitHub Actions, запуск в Actions и URL, содержащий имя репозитория.</li><li>Аватар не читается: Storage bucket avatars должен быть Private с правилами миграции.</li></ul>
+  <p class="warn">Резервная копия .ics включает только доступные события; она не сохраняет аккаунты, опросы, идеи, теги и Storage. Проверяйте Database → Backups в зависимости от возможностей вашего плана Supabase и отдельно храните файлы Storage.</p>
+  <p><a href="https://supabase.com/docs/guides/getting-started/api-keys">API keys</a> · <a href="https://supabase.com/docs/guides/auth/redirect-urls">Redirect URLs</a> · <a href="https://supabase.com/docs/guides/storage/security/access-control">Storage access control</a></p>
+</main></body></html>
