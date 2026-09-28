@@ -246,16 +246,16 @@ grant execute on function public.accept_invitation(text) to authenticated;
 -- One transaction per event save. expected_updated_at prevents silent last-write-wins edits.
 create or replace function public.save_calendar_event(p_event jsonb, p_details jsonb, p_expected_updated_at timestamptz default null)
 returns timestamptz language plpgsql security definer set search_path = '' as $$
-declare event_id uuid; existing public.events%rowtype; saved_at timestamptz;
+declare v_event_id uuid; existing public.events%rowtype; saved_at timestamptz;
 begin
   if auth.uid() is null then raise exception 'Требуется вход'; end if;
-  event_id := coalesce((p_event->>'id')::uuid, gen_random_uuid());
+  v_event_id := coalesce((p_event->>'id')::uuid, gen_random_uuid());
   if not public.is_couple_member((p_event->>'couple_id')::uuid) then raise exception 'Нет доступа к календарю'; end if;
   if p_event->>'visibility' is null or p_event->>'visibility' not in ('full', 'busy', 'private') then raise exception 'Некорректная видимость'; end if;
   if not exists (select 1 from pg_catalog.pg_timezone_names where name = coalesce(nullif(p_event->>'timezone', ''), 'UTC')) then
     raise exception 'Неизвестный часовой пояс';
   end if;
-  select * into existing from public.events where id = event_id for update;
+  select * into existing from public.events where id = v_event_id for update;
   if existing.id is not null then
     if existing.owner_id <> auth.uid() then raise exception 'Изменять событие может только его автор'; end if;
     if existing.couple_id <> (p_event->>'couple_id')::uuid then raise exception 'Нельзя перенести событие в другой календарь'; end if;
@@ -272,11 +272,11 @@ begin
       recurrence_frequency = nullif(p_event->>'recurrence_frequency', ''),
       recurrence_interval = coalesce(nullif(p_event->>'recurrence_interval', '')::integer, 1),
       recurrence_until = nullif(p_event->>'recurrence_until', '')::date
-    where id = event_id returning updated_at into saved_at;
+    where id = v_event_id returning updated_at into saved_at;
   else
     insert into public.events(id, couple_id, owner_id, starts_at, ends_at, all_day, timezone, visibility, surprise_until, recurrence_frequency, recurrence_interval, recurrence_until)
     values (
-      event_id, (p_event->>'couple_id')::uuid, auth.uid(),
+      v_event_id, (p_event->>'couple_id')::uuid, auth.uid(),
       (p_event->>'starts_at')::timestamptz, (p_event->>'ends_at')::timestamptz,
       coalesce((p_event->>'all_day')::boolean, false), coalesce(nullif(p_event->>'timezone', ''), 'UTC'),
       p_event->>'visibility', nullif(p_event->>'surprise_until', '')::timestamptz,
@@ -286,11 +286,11 @@ begin
   end if;
   insert into public.event_details(event_id, title, description, place, address, latitude, longitude, category, tags, color, reminders)
   values (
-    event_id, p_details->>'title', coalesce(p_details->>'description', ''), coalesce(p_details->>'place', ''), coalesce(p_details->>'address', ''),
+    v_event_id, p_details->>'title', coalesce(p_details->>'description', ''), coalesce(p_details->>'place', ''), coalesce(p_details->>'address', ''),
     nullif(p_details->>'latitude', '')::double precision, nullif(p_details->>'longitude', '')::double precision,
     coalesce(p_details->>'category', 'Другое'), coalesce(array(select jsonb_array_elements_text(coalesce(p_details->'tags', '[]'::jsonb))), '{}'),
     coalesce(p_details->>'color', '#a6e3b0'), coalesce(p_details->'reminders', '[]'::jsonb)
-  ) on conflict (event_id) do update set
+  ) on conflict on constraint event_details_pkey do update set
     title = excluded.title, description = excluded.description, place = excluded.place, address = excluded.address,
     latitude = excluded.latitude, longitude = excluded.longitude, category = excluded.category, tags = excluded.tags,
     color = excluded.color, reminders = excluded.reminders, updated_at = now();
