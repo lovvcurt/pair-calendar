@@ -1,4 +1,5 @@
 :root {
+  --telegram-viewport-height: 100dvh;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color-scheme: dark;
   font-synthesis: none;
@@ -52,7 +53,7 @@ button { color: inherit; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
 button:disabled { opacity: .56; cursor: not-allowed; }
 ::selection { background: color-mix(in srgb, var(--mint) 35%, transparent); }
-.app-shell { min-height: 100dvh; }
+.app-shell { min-height: var(--telegram-viewport-height, 100dvh); }
 .panel { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 20px; }
 .side-rail { position: fixed; inset: 0 auto 0 0; z-index: 10; width: 252px; display: flex; flex-direction: column; padding: 30px 18px 18px; background: var(--panel); border-right: 1px solid var(--border-soft); }
 .brand-mark { display: inline-flex; align-items: center; gap: 9px; color: var(--text); font-family: var(--font-display); font-size: 21px; font-weight: 800; letter-spacing: -.9px; }
@@ -78,7 +79,7 @@ button:disabled { opacity: .56; cursor: not-allowed; }
 .user-row { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 8px 2px; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .user-row span:nth-child(2) { flex: 1; overflow: hidden; color: var(--text-secondary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .user-row svg { color: var(--muted); }
-.main-column { min-height: 100dvh; margin-left: 252px; }
+.main-column { min-height: var(--telegram-viewport-height, 100dvh); margin-left: 252px; }
 .topbar { position: sticky; top: 0; z-index: 5; height: 92px; display: flex; align-items: center; justify-content: space-between; padding: 16px clamp(25px, 4.2vw, 65px); border-bottom: 1px solid var(--border-soft); background: color-mix(in srgb, var(--page) 92%, transparent); backdrop-filter: blur(16px); }
 .topbar-title { display: grid; gap: 3px; }
 .eyebrow { color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: 1.35px; }
@@ -310,7 +311,7 @@ input[type=checkbox], input[type=radio] { width: 15px; height: 15px; accent-colo
 .export-options { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border-soft); border-radius: 12px; }
 
 /* Authentication and first run */
-.auth-screen { min-height: 100dvh; display: grid; place-items: center; padding: 28px 16px; background: radial-gradient(ellipse at 50% 20%, color-mix(in srgb, var(--mint) 7%, var(--page)), var(--page) 58%); }
+.auth-screen { min-height: var(--telegram-viewport-height, 100dvh); display: grid; place-items: center; padding: 28px 16px; background: radial-gradient(ellipse at 50% 20%, color-mix(in srgb, var(--mint) 7%, var(--page)), var(--page) 58%); }
 .auth-card { width: min(100%, 420px); padding: 27px; border-radius: 22px; box-shadow: var(--shadow); }
 .auth-intro { margin: 30px 0 23px; }.auth-intro h1, .auth-card > h1 { margin: 0 0 8px; font-family: var(--font-display); font-size: 25px; letter-spacing: -.8px; }.auth-intro p, .auth-card > p { margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
 .auth-links { display: grid; justify-items: center; gap: 9px; margin-top: 17px; }.auth-links .text-button { font-size: 10px; }
