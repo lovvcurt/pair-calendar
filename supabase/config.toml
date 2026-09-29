@@ -1,0 +1,7 @@
+[functions.push-reminders]
+# The scheduled caller authenticates with a secret header checked in the function.
+verify_jwt = false
+
+[functions.telegram-auth]
+# Login starts before a Supabase session exists; the function verifies Telegram initData itself.
+verify_jwt = false

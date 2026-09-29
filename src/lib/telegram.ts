@@ -4,6 +4,8 @@ type TelegramThemeParams = {
 };
 
 type TelegramWebApp = {
+  /** Raw signed launch data. The server verifies this; never trust initDataUnsafe. */
+  initData: string;
   colorScheme: 'light' | 'dark';
   viewportHeight: number;
   viewportStableHeight?: number;
@@ -45,4 +47,10 @@ export function initializeTelegramMiniApp(): void {
   updateThemeColor();
   webApp.onEvent('viewportChanged', updateViewport);
   webApp.onEvent('themeChanged', updateThemeColor);
+}
+
+/** Telegram's signed launch string, or null when this page was opened elsewhere. */
+export function getTelegramInitData(): string | null {
+  const value = window.Telegram?.WebApp?.initData?.trim();
+  return value || null;
 }

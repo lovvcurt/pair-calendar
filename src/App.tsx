@@ -5,7 +5,7 @@ import {
   AlarmClock, ArrowDownToLine, ArrowRight, Bell, CalendarDays, Check, CheckCircle2,
   ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Cloud, CloudOff, Compass, Download,
   Heart, Lightbulb, Link2, LoaderCircle, LogOut, MapPin, Menu, Moon, Pencil, Plus,
-  Settings2, Shield, Sparkles, Sun, Tag, Trash2, Upload, Users, Vote, X,
+  Send, Settings2, Shield, Sparkles, Sun, Tag, Trash2, Upload, Users, Vote, X,
 } from 'lucide-react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase, supabaseConfigured, errorMessage } from './lib/supabase';
@@ -15,6 +15,7 @@ import {
 } from './lib/calendar';
 import type { CalendarEvent, EventDetails, Visibility } from './lib/calendar';
 import { exportCalendar, parseCalendar, type ImportedEvent } from './lib/ics';
+import { getTelegramInitData } from './lib/telegram';
 
 type Tab = 'calendar' | 'polls' | 'ideas' | 'settings';
 type Profile = { id: string; display_name: string; avatar_path: string | null };
@@ -37,6 +38,24 @@ const colorOptions = ['#a6e3b0', '#f3a6b7', '#a6c8ff', '#e8bd7a', '#c7a6ff', '#f
 const reminderOptions = [5, 15, 30, 60, 180, 1440, 10080];
 const maxBrowserTimeout = 2_147_000_000;
 const reminderLabel = (minutes: number) => minutes < 60 ? `${minutes} мин.` : minutes < 1440 ? `${minutes / 60} ч.` : `${minutes / 1440} дн.`;
+
+async function callTelegramFunction<T>(body: Record<string, unknown>): Promise<T> {
+  if (!supabase) throw new Error('Сначала подключите Supabase.');
+  const { data, error } = await supabase.functions.invoke('telegram-auth', { body });
+  if (error) {
+    const context = (error as { context?: unknown }).context;
+    if (context instanceof Response) {
+      const payload = await context.clone().json().catch(() => null) as { error?: unknown } | null;
+      if (typeof payload?.error === 'string') throw new Error(payload.error);
+    }
+    throw new Error(errorMessage(error));
+  }
+  return data as T;
+}
+
+function accountName(user: User, profile?: Profile) {
+  return profile?.display_name?.trim() || (user.app_metadata?.telegram_login ? 'Пользователь Telegram' : user.email?.split('@')[0]) || 'Вы';
+}
 
 function useTheme() {
   const [theme, setTheme] = useState(() => localStorage.getItem('vmeste-theme') ?? 'dark');
@@ -78,6 +97,7 @@ function Dialog({ title, children, close, wide = false, mobileFullHeight = false
 function AuthScreen({ invitePending }: { invitePending: boolean }) {
   const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login');
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [error, setError] = useState('');
+  const [telegramBusy, setTelegramBusy] = useState(false); const [telegramError, setTelegramError] = useState('');
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!supabase) return;
     setBusy(true); setError(''); setMessage('');
@@ -98,6 +118,17 @@ function AuthScreen({ invitePending }: { invitePending: boolean }) {
       }
     } catch (cause) { setError(errorMessage(cause)); } finally { setBusy(false); }
   }
+  async function signInWithTelegram() {
+    const initData = getTelegramInitData();
+    if (!supabase || !initData) return;
+    setTelegramBusy(true); setTelegramError('');
+    try {
+      const result = await callTelegramFunction<{ access_token: string; refresh_token: string }>({ action: 'login', initData });
+      const { error: sessionError } = await supabase.auth.setSession({ access_token: result.access_token, refresh_token: result.refresh_token });
+      if (sessionError) throw sessionError;
+    } catch (cause) { setTelegramError(errorMessage(cause)); }
+    finally { setTelegramBusy(false); }
+  }
   const title = mode === 'signup' ? 'Создайте аккаунт' : mode === 'reset' ? 'Восстановление доступа' : 'Рады видеть вас';
   return <main className="auth-screen"><div className="auth-card panel">
     <Brand /><div className="auth-intro"><h1>{title}</h1><p>{invitePending ? 'Войдите или зарегистрируйтесь, чтобы принять приглашение партнёра.' : 'Ваше общее место для планов, встреч и маленьких поводов быть рядом.'}</p></div>
@@ -108,6 +139,7 @@ function AuthScreen({ invitePending }: { invitePending: boolean }) {
       {error && <p className="form-error">{error}</p>}{message && <p className="form-success">{message}</p>}
       <button className="button button-primary button-block" disabled={busy}>{busy && <LoaderCircle className="spin" size={17} />}{mode === 'signup' ? 'Создать аккаунт' : mode === 'reset' ? 'Отправить письмо' : 'Войти'}</button>
     </form>
+    {getTelegramInitData() && mode !== 'reset' && <div className="auth-telegram"><span className="auth-divider">или</span>{telegramError && <p className="form-error">{telegramError}</p>}<button className="button button-secondary button-block" disabled={telegramBusy} onClick={() => void signInWithTelegram()}>{telegramBusy ? <LoaderCircle className="spin" size={17} /> : <Send size={16} />} Продолжить через Telegram</button><p>Если Telegram уже привязан, откроется существующий аккаунт. Для уже созданного календаря сначала войдите по email и привяжите Telegram в настройках, иначе появится отдельный аккаунт.</p><p>Если вход не настроен, <a href={`${import.meta.env.BASE_URL}guide.html#telegram-auth`}>откройте инструкцию</a>.</p></div>}
     <div className="auth-links">
       {mode === 'login' && <button className="text-button" onClick={() => setMode('reset')}>Забыли пароль?</button>}
       <button className="text-button" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); setMessage(''); }}>{mode === 'signup' ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться'}</button>
@@ -115,6 +147,33 @@ function AuthScreen({ invitePending }: { invitePending: boolean }) {
     </div>
     <p className="fine-print"><Shield size={14} /> Ваши данные защищены правилами доступа Supabase.</p>
   </div></main>;
+}
+
+function TelegramLinkCard({ user, onNotice }: { user: User; onNotice: (text: string, kind?: 'success' | 'error' | 'info') => void }) {
+  const [state, setState] = useState<'checking' | 'linked' | 'unlinked' | 'unavailable'>('checking');
+  const [busy, setBusy] = useState(false);
+  const initData = getTelegramInitData();
+  useEffect(() => {
+    let active = true;
+    void callTelegramFunction<{ linked: boolean }>({ action: 'status' })
+      .then(({ linked }) => { if (active) setState(linked ? 'linked' : 'unlinked'); })
+      .catch(() => { if (active) setState('unavailable'); });
+    return () => { active = false; };
+  }, [user.id]);
+  async function linkTelegram() {
+    if (!initData) return;
+    setBusy(true);
+    try {
+      await callTelegramFunction<{ linked: boolean }>({ action: 'link', initData });
+      setState('linked');
+      onNotice('Telegram привязан к этому аккаунту. Теперь через него можно входить в Mini App.');
+    } catch (cause) { onNotice(errorMessage(cause), 'error'); }
+    finally { setBusy(false); }
+  }
+  return <section className="settings-card panel telegram-settings"><div className="settings-card-heading"><span className="small-icon mint"><Send size={16} /></span><div><h3>Вход через Telegram</h3><p>Привяжите Mini App к уже созданному аккаунту календаря.</p></div></div>
+    {state === 'checking' ? <p className="settings-hint">Проверяем привязку…</p> : state === 'unavailable' ? <><p className="settings-hint">Серверная функция входа через Telegram ещё не настроена или недоступна.</p><a className="text-button" href={`${import.meta.env.BASE_URL}guide.html#telegram-auth`}>Открыть инструкцию по настройке</a></> : state === 'linked' ? <p className="settings-hint"><CheckCircle2 size={15} /> Telegram уже связан с этим аккаунтом.</p> : initData ? <><button className="button button-secondary" disabled={busy} onClick={() => void linkTelegram()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Link2 size={16} />} Привязать Telegram</button><p className="settings-hint">Откройте этот экран из Telegram Mini App. Мы привяжем текущий аккаунт, в который вы вошли.</p></> : <p className="settings-hint">Чтобы привязать Telegram, откройте календарь из Mini App и войдите здесь в свой обычный аккаунт.</p>}
+    <p className="settings-hint">Привязка не объединяет разные календари. Она добавляет Telegram как способ входа именно в этот аккаунт.</p>
+  </section>;
 }
 
 function Brand() { return <div className="brand-mark"><span className="brand-icon"><Heart size={19} fill="currentColor" /></span><span>вместе</span><span className="brand-dot">.</span></div>; }
@@ -167,7 +226,7 @@ function PairSetup({ user, pendingInvite, onRefresh, onNotice }: { user: User; p
 function App() {
   const { theme, change: changeTheme } = useTheme();
   const [session, setSession] = useState<Session | null>(null); const [authReady, setAuthReady] = useState(false); const [recoveryMode, setRecoveryMode] = useState(false);
-  const [tab, setTab] = useState<Tab>('calendar'); const [loading, setLoading] = useState(false); const [refreshKey, setRefreshKey] = useState(0); const [reminderClock, setReminderClock] = useState(0);
+  const [tab, setTab] = useState<Tab>('calendar'); const [loading, setLoading] = useState(false); const [refreshKey, setRefreshKey] = useState(0); const [reminderClock, setReminderClock] = useState(0); const [devicePushActive, setDevicePushActive] = useState(false);
   const [couple, setCouple] = useState<CoupleInfo | null>(null); const [profiles, setProfiles] = useState<Profile[]>([]); const [avatars, setAvatars] = useState<Record<string, string>>({});
   const [events, setEvents] = useState<CalendarEvent[]>([]); const [polls, setPolls] = useState<Poll[]>([]); const [pollOptions, setPollOptions] = useState<PollOption[]>([]); const [votes, setVotes] = useState<VoteRow[]>([]); const [exportRequested, setExportRequested] = useState(false);
   const [ideas, setIdeas] = useState<DateIdea[]>([]); const [importantDates, setImportantDates] = useState<ImportantDate[]>([]); const [tags, setTags] = useState<TagRow[]>([]);
@@ -216,7 +275,7 @@ function App() {
       if (detailsResult.error) throw detailsResult.error;
       const profileRows = (profileResult.data ?? []) as Profile[]; setProfiles(profileRows); setCouple(coupleResult.data as CoupleInfo);
       const detailById = new Map((detailsResult.data ?? []).map((row: Record<string, unknown>) => [row.event_id as string, row]));
-      const names = new Map(profileRows.map((profile) => [profile.id, profile.display_name || (profile.id === user.id ? user.email?.split('@')[0] : 'Партнёр') || 'Участник']));
+      const names = new Map(profileRows.map((profile) => [profile.id, profile.display_name || (profile.id === user.id ? accountName(user, profile) : 'Партнёр') || 'Участник']));
       setEvents(((eventResult.data ?? []) as Omit<CalendarEvent, 'details' | 'ownerName'>[]).map((event) => ({
         ...event, details: (detailById.get(event.id) as unknown as EventDetails | undefined) ?? null, ownerName: names.get(event.owner_id) ?? 'Участник',
       })));
@@ -277,7 +336,19 @@ function App() {
   useEffect(() => { const handler = () => setConnection(navigator.onLine ? 'connecting' : 'offline'); window.addEventListener('online', handler); window.addEventListener('offline', handler); return () => { window.removeEventListener('online', handler); window.removeEventListener('offline', handler); }; }, []);
 
   useEffect(() => {
-    if (!events.length || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    let live = true;
+    const refreshPushState = async (event?: Event) => {
+      if (event instanceof CustomEvent && typeof event.detail === 'boolean') { setDevicePushActive(event.detail); return; }
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) { setDevicePushActive(false); return; }
+      try { const registration = await navigator.serviceWorker.getRegistration(); const subscription = await registration?.pushManager.getSubscription(); if (live) setDevicePushActive(Boolean(subscription)); }
+      catch { if (live) setDevicePushActive(false); }
+    };
+    void refreshPushState(); window.addEventListener('push-subscription-change', refreshPushState);
+    return () => { live = false; window.removeEventListener('push-subscription-change', refreshPushState); };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (devicePushActive || !events.length || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     const seen: string[] = JSON.parse(localStorage.getItem('vmeste-fired-reminders') ?? '[]');
     const now = Date.now(); const windowEnd = new Date(now + 366 * 86_400_000); const timers: number[] = []; let hasDistantReminder = false;
     for (const event of events) {
@@ -301,10 +372,10 @@ function App() {
     }
     if (hasDistantReminder) timers.push(window.setTimeout(() => setReminderClock((clock) => clock + 1), maxBrowserTimeout));
     return () => timers.forEach(window.clearTimeout);
-  }, [events, reminderClock]);
+  }, [events, reminderClock, devicePushActive]);
 
   useEffect(() => {
-    if (!importantDates.length || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    if (devicePushActive || !importantDates.length || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     const timers: number[] = [];
     for (const item of importantDates) {
       const [month, day] = item.event_date.slice(5, 10).split('-').map(Number);
@@ -328,14 +399,23 @@ function App() {
       timers.push(window.setTimeout(fire, Math.min(Math.max(1, remindAt - Date.now()), 2_000_000_000)));
     }
     return () => timers.forEach(window.clearTimeout);
-  }, [importantDates]);
+  }, [importantDates, devicePushActive]);
 
   async function install() {
     if (!installPrompt) return;
     await installPrompt.prompt(); const choice = await installPrompt.userChoice;
     showNotice(choice.outcome === 'accepted' ? 'Приложение добавлено на устройство.' : 'Установку можно запустить позже из меню браузера.', 'info'); setInstallPrompt(null);
   }
-  async function signOut() { if (!supabase) return; await supabase.auth.signOut(); setTab('calendar'); }
+  async function signOut() {
+    if (!supabase) return;
+    try {
+      if ('serviceWorker' in navigator && 'PushManager' in window) {
+        const registration = await navigator.serviceWorker.getRegistration(); const subscription = await registration?.pushManager.getSubscription();
+        if (subscription) { await supabase.from('push_subscriptions').delete().eq('endpoint', subscription.endpoint); await subscription.unsubscribe(); }
+      }
+    } catch { /* Logout still needs to work if the device is offline. */ }
+    await supabase.auth.signOut(); setTab('calendar');
+  }
 
   if (!supabaseConfigured) return <ConfigurationScreen />;
   if (!authReady) return <main className="auth-screen"><div className="loading-card"><LoaderCircle size={24} className="spin" /><span>Подключаем аккаунт…</span></div></main>;
@@ -430,13 +510,13 @@ function App() {
   }
 
   return <div className="app-shell">
-    <aside className="side-rail"><div className="side-brand"><Brand /></div><div className="pair-mini"><div className="pair-avatars"><Avatar name={myProfile?.display_name || user.email || 'Вы'} url={avatars[user.id]} /><Avatar name={partner?.display_name || 'Партнёр'} url={partner ? avatars[partner.id] : null} /></div><div><b>{couple.name}</b><small>{partner ? 'Ваш общий календарь' : 'Пока вы вдвоём?'}</small></div></div>
+    <aside className="side-rail"><div className="side-brand"><Brand /></div><div className="pair-mini"><div className="pair-avatars"><Avatar name={accountName(user, myProfile)} url={avatars[user.id]} /><Avatar name={partner?.display_name || 'Партнёр'} url={partner ? avatars[partner.id] : null} /></div><div><b>{couple.name}</b><small>{partner ? 'Ваш общий календарь' : 'Пока вы вдвоём?'}</small></div></div>
       <nav className="side-nav" aria-label="Главная навигация">{tabs.map(({ id, label, icon: Icon }) => <button className={`nav-item ${tab === id ? 'selected' : ''}`} key={id} onClick={() => setTab(id)}><Icon size={19} /><span>{id === 'settings' ? 'Настройки' : label}</span></button>)}</nav>
       <button className="button button-primary side-add" onClick={() => { setEventDate(todayInput()); setActiveEvent(null); }}><Plus size={17} /> Новое событие</button>
-      <div className="side-bottom"><Connection status={connection} /><button className="user-row" onClick={() => setTab('settings')}><Avatar name={myProfile?.display_name || user.email || 'Вы'} url={avatars[user.id]} size="small" /><span>{myProfile?.display_name || user.email}</span><ChevronDown size={15} /></button></div>
+      <div className="side-bottom"><Connection status={connection} /><button className="user-row" onClick={() => setTab('settings')}><Avatar name={accountName(user, myProfile)} url={avatars[user.id]} size="small" /><span>{accountName(user, myProfile)}</span><ChevronDown size={15} /></button></div>
     </aside>
     <div className="main-column"><header className="topbar"><div className="mobile-brand"><Brand /></div><div className="topbar-title"><span className="eyebrow">ВАШЕ ВРЕМЯ ВДВОЁМ</span><h1>{tab === 'calendar' ? 'Календарь' : tab === 'polls' ? 'Опросы' : tab === 'ideas' ? 'Идеи свиданий' : 'Настройки'}</h1></div>
-      <div className="topbar-actions"><Connection status={connection} /><div className="header-avatars"><Avatar name={myProfile?.display_name || user.email || 'Вы'} url={avatars[user.id]} size="small" /><span className="avatar-plus">+</span><Avatar name={partner?.display_name || 'Партнёр'} url={partner ? avatars[partner.id] : null} size="small" /></div><button className="button button-primary header-add" onClick={() => { setEventDate(todayInput()); setActiveEvent(null); }}><Plus size={17} /><span>Событие</span></button></div>
+      <div className="topbar-actions"><Connection status={connection} /><div className="header-avatars"><Avatar name={accountName(user, myProfile)} url={avatars[user.id]} size="small" /><span className="avatar-plus">+</span><Avatar name={partner?.display_name || 'Партнёр'} url={partner ? avatars[partner.id] : null} size="small" /></div><button className="button button-primary header-add" onClick={() => { setEventDate(todayInput()); setActiveEvent(null); }}><Plus size={17} /><span>Событие</span></button></div>
     </header>
     {loading && <div className="sync-line"><span /></div>}
     {pwaUpdate && <div className="update-banner"><span>Доступна новая версия приложения.</span><button className="button button-secondary" onClick={() => navigator.serviceWorker.getRegistration().then((registration) => registration?.waiting?.postMessage('SKIP_WAITING'))}>Обновить</button><button className="icon-button" aria-label="Позже" onClick={() => setPwaUpdate(false)}><X size={15} /></button></div>}
@@ -444,7 +524,7 @@ function App() {
       {tab === 'calendar' && <CalendarView events={events} userId={user.id} hasPartner={Boolean(partner)} date={eventDate} setDate={setEventDate} busy={loading} onCreate={(date) => { setEventDate(date); setActiveEvent(null); }} onOpen={(event) => setActiveEvent(event)} onExport={() => { setExportRequested(true); setTab('settings'); }} />}
       {tab === 'polls' && <PollsView polls={polls} options={pollOptions} votes={votes} userId={user.id} tags={tags} onCreate={createPoll} onVote={vote} onError={(text) => showNotice(text, 'error')} />}
       {tab === 'ideas' && <IdeasView ideas={ideas} onSave={saveIdea} onStatus={changeIdeaStatus} onDelete={removeIdea} onError={(text) => showNotice(text, 'error')} />}
-      {tab === 'settings' && <SettingsView user={user} profile={myProfile} partner={partner} avatars={avatars} couple={couple} theme={theme} onTheme={changeTheme} onProfile={updateProfile} onAvatar={uploadAvatar} openExport={exportRequested} onExportOpened={() => setExportRequested(false)} onInvite={async () => {
+      {tab === 'settings' && <SettingsView user={user} profile={myProfile} partner={partner} avatars={avatars} couple={couple} theme={theme} onTheme={changeTheme} onProfile={updateProfile} onAvatar={uploadAvatar} vapidPublicKey={import.meta.env.VITE_VAPID_PUBLIC_KEY ?? ''} openExport={exportRequested} onExportOpened={() => setExportRequested(false)} onInvite={async () => {
         if (!supabase) return ''; const { data: member } = await supabase.from('couple_members').select('couple_id').eq('user_id', user.id).single(); const { data, error } = await supabase.rpc('create_invitation', { p_couple_id: member?.couple_id }); if (error) throw error; return `${location.origin}${import.meta.env.BASE_URL}?invite=${data}`;
       }} onSignOut={signOut} onAddTag={addTag} onDeleteTag={removeTag} tags={tags} importantDates={importantDates} onAddDate={addImportantDate} onDeleteDate={deleteImportantDate} onImport={importFile} onExport={exportCurrent} events={events} installPrompt={Boolean(installPrompt)} onInstall={install} onNotice={showNotice} />}
     </main>
@@ -605,41 +685,103 @@ function IdeaDialog({ idea, close, onSave, busy }: { idea: DateIdea | null; clos
   return <Dialog title={idea ? 'Изменить идею' : 'Новая идея'} close={close}><form className="stack-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...(idea ?? {}), title: title.trim(), description: description.trim(), tags: tagText.split(',').map((tag) => tag.trim()).filter(Boolean) }); }}><Field label="Название"><input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} maxLength={160} placeholder="Например, пикник на закате" required /></Field><Field label="Описание"><textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2500} placeholder="Что понадобится или почему хочется попробовать?" /></Field><Field label="Теги"><input value={tagText} onChange={(e) => setTagText(e.target.value)} placeholder="Природа, недорого, рядом" /></Field><div className="dialog-actions"><button className="button button-secondary" type="button" onClick={close}>Отмена</button><button className="button button-primary" disabled={busy || !title.trim()}>{busy && <LoaderCircle size={16} className="spin" />}{idea ? 'Сохранить' : 'Добавить идею'}</button></div></form></Dialog>;
 }
 
-function SettingsView({ user, profile, partner, avatars, couple, theme, onTheme, onProfile, onAvatar, onInvite, onSignOut, tags, onAddTag, onDeleteTag, importantDates, onAddDate, onDeleteDate, onImport, onExport, events, installPrompt, onInstall, onNotice, openExport, onExportOpened }: {
+function SettingsView({ user, profile, partner, avatars, couple, theme, onTheme, onProfile, onAvatar, onInvite, onSignOut, tags, onAddTag, onDeleteTag, importantDates, onAddDate, onDeleteDate, onImport, onExport, events, installPrompt, onInstall, onNotice, vapidPublicKey, openExport, onExportOpened }: {
   user: User; profile?: Profile; partner?: Profile; avatars: Record<string, string>; couple: CoupleInfo; theme: string;
   onTheme: (value: string) => void; onProfile: (name: string) => Promise<void>; onAvatar: (file: File | null) => Promise<void>; openExport: boolean; onExportOpened: () => void;
   onInvite: () => Promise<string>; onSignOut: () => Promise<void>; tags: TagRow[]; onAddTag: (label: string, color: string) => Promise<void>; onDeleteTag: (tag: TagRow) => Promise<void>;
   importantDates: ImportantDate[]; onAddDate: (title: string, date: string, repeats: boolean, reminderDays: number) => Promise<void>; onDeleteDate: (item: ImportantDate) => Promise<void>;
-  onImport: (file: File) => Promise<void>; onExport: (from: Date, to: Date, allowed: Visibility[]) => void; events: CalendarEvent[]; installPrompt: boolean; onInstall: () => void; onNotice: (text: string, kind?: 'success' | 'error' | 'info') => void;
+  onImport: (file: File) => Promise<void>; onExport: (from: Date, to: Date, allowed: Visibility[]) => void; events: CalendarEvent[]; installPrompt: boolean; onInstall: () => void; onNotice: (text: string, kind?: 'success' | 'error' | 'info') => void; vapidPublicKey: string;
 }) {
   const [displayName, setDisplayName] = useState(profile?.display_name ?? ''); const [profileBusy, setProfileBusy] = useState(false); const [link, setLink] = useState(''); const [inviteBusy, setInviteBusy] = useState(false);
   const [tagName, setTagName] = useState(''); const [tagColor, setTagColor] = useState('#a6e3b0'); const [tagBusy, setTagBusy] = useState(false);
   const [dateDialog, setDateDialog] = useState(false); const [exportDialog, setExportDialog] = useState(false); const [reminderPermission, setReminderPermission] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+  const [pushState, setPushState] = useState<'checking' | 'enabled' | 'disabled' | 'not-saved' | 'unsupported'>('checking'); const [pushBusy, setPushBusy] = useState(false);
   useEffect(() => setDisplayName(profile?.display_name ?? ''), [profile?.display_name]);
   useEffect(() => { if (openExport) { setExportDialog(true); onExportOpened(); } }, [openExport, onExportOpened]);
+  useEffect(() => {
+    let live = true;
+    const check = async () => {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') { setPushState('unsupported'); return; }
+      try {
+        const registration = await navigator.serviceWorker.getRegistration();
+        if (!registration) { if (live) setPushState('unsupported'); return; }
+        const subscription = await registration.pushManager.getSubscription();
+        if (!subscription) { if (live) setPushState('disabled'); return; }
+        const { data, error } = await supabase!.from('push_subscriptions').select('id').eq('user_id', user.id).eq('endpoint', subscription.endpoint).maybeSingle();
+        if (error) throw error;
+        if (live) setPushState(data ? 'enabled' : 'not-saved');
+      } catch { if (live) setPushState('not-saved'); }
+    };
+    void check(); return () => { live = false; };
+  }, [user.id]);
   async function saveName(event: FormEvent) { event.preventDefault(); setProfileBusy(true); try { await onProfile(displayName.trim()); } catch (cause) { onNotice(errorMessage(cause), 'error'); } finally { setProfileBusy(false); } }
   async function invite() { setInviteBusy(true); try { const value = await onInvite(); setLink(value); } catch (cause) { onNotice(errorMessage(cause), 'error'); } finally { setInviteBusy(false); } }
   async function saveTag(event: FormEvent) { event.preventDefault(); setTagBusy(true); try { await onAddTag(tagName.trim(), tagColor); setTagName(''); onNotice('Тег добавлен.'); } catch (cause) { onNotice(errorMessage(cause), 'error'); } finally { setTagBusy(false); } }
   async function chooseAvatar(event: React.ChangeEvent<HTMLInputElement>) { try { await onAvatar(event.target.files?.[0] ?? null); } catch (cause) { onNotice(errorMessage(cause), 'error'); } finally { event.target.value = ''; } }
-  async function requestReminders() {
-    if (!('Notification' in window)) { onNotice('Этот браузер не поддерживает системные уведомления.', 'error'); return; }
-    const permission = await Notification.requestPermission(); setReminderPermission(permission);
-    onNotice(permission === 'granted' ? 'Разрешение получено. Напоминания будут показываться, пока приложение открыто.' : permission === 'denied' ? 'Разрешение отклонено. Его можно изменить в настройках сайта браузера.' : 'Разрешение пока не выдано.', permission === 'granted' ? 'success' : 'info');
+  function pushKeyBytes(value: string): Uint8Array {
+    const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
+    const raw = atob(padded); return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+  }
+  function pushStateChanged(active: boolean) { window.dispatchEvent(new CustomEvent('push-subscription-change', { detail: active })); }
+  async function enablePush() {
+    if (!supabase) { onNotice('Сначала подключите Supabase.', 'error'); return; }
+    if (!vapidPublicKey || vapidPublicKey.includes('PASTE_PUBLIC')) { onNotice('Сначала настройте публичный VAPID-ключ в сборке приложения. См. раздел «Push-уведомления» в инструкции.', 'error'); return; }
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') { setPushState('unsupported'); onNotice('Этот браузер не поддерживает Web Push. Установите PWA и попробуйте Chrome на Android или Safari на iPhone.', 'error'); return; }
+    const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) || (/macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+    const installed = window.matchMedia('(display-mode: standalone)').matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+    if (isIos && !installed) { onNotice('На iPhone сначала добавьте сайт на экран «Домой», затем откройте установленное приложение и включите push.', 'info'); return; }
+    setPushBusy(true);
+    try {
+      let permission = Notification.permission;
+      if (permission === 'default') permission = await Notification.requestPermission();
+      setReminderPermission(permission);
+      if (permission !== 'granted') { setPushState('disabled'); onNotice(permission === 'denied' ? 'Уведомления запрещены. Разрешите их в настройках сайта браузера и повторите.' : 'Чтобы получать push, разрешите уведомления.', 'info'); return; }
+      const existingRegistration = await navigator.serviceWorker.getRegistration();
+      if (!existingRegistration) throw new Error('Сначала откройте опубликованную версию сайта по HTTPS и дождитесь загрузки приложения.');
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription() ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushKeyBytes(vapidPublicKey) });
+      const keys = subscription.toJSON().keys;
+      if (!keys?.p256dh || !keys.auth) throw new Error('Браузер не вернул ключи push-подписки. Попробуйте обновить страницу.');
+      const { error } = await supabase.from('push_subscriptions').upsert({
+        user_id: user.id, endpoint: subscription.endpoint, p256dh: keys.p256dh, auth_secret: keys.auth,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', updated_at: new Date().toISOString(),
+      }, { onConflict: 'endpoint' });
+      if (error) { await subscription.unsubscribe(); throw error; }
+      setPushState('enabled'); pushStateChanged(true); onNotice('Push включён на этом устройстве. Партнёру нужно включить его отдельно.', 'success');
+    } catch (cause) { setPushState('not-saved'); onNotice(`Не удалось включить push: ${errorMessage(cause)}`, 'error'); }
+    finally { setPushBusy(false); }
+  }
+  async function disablePush() {
+    setPushBusy(true);
+    try {
+      if (supabase && 'serviceWorker' in navigator && 'PushManager' in window) {
+        const registration = await navigator.serviceWorker.getRegistration(); const subscription = await registration?.pushManager.getSubscription();
+        if (subscription) {
+          const { error } = await supabase.from('push_subscriptions').delete().eq('user_id', user.id).eq('endpoint', subscription.endpoint);
+          if (error) throw error;
+          await subscription.unsubscribe();
+        }
+      }
+      setPushState('disabled'); pushStateChanged(false); onNotice('Push выключен на этом устройстве.', 'info');
+    } catch (cause) { onNotice(`Не удалось выключить push: ${errorMessage(cause)}`, 'error'); }
+    finally { setPushBusy(false); }
   }
   const uploadInput = useRef<HTMLInputElement>(null); const importInput = useRef<HTMLInputElement>(null);
 
   return <div className="section-page settings-page"><section className="page-intro"><div><span className="eyebrow">ВАШ ПРОФИЛЬ И ОБЩЕЕ ПРОСТРАНСТВО</span><h2>Настройки</h2><p>Аккаунты, приватность, напоминания и перенос календаря.</p></div><Connection status="online" /></section>
     <div className="settings-grid">
-      <section className="settings-card panel profile-settings"><div className="settings-card-heading"><span className="small-icon mint"><Users size={16} /></span><div><h3>Профиль</h3><p>Это имя увидит партнёр в общем календаре.</p></div></div><div className="profile-edit"><Avatar name={profile?.display_name || user.email || 'Вы'} url={profile ? avatars[profile.id] : null} size="large" /><div className="profile-upload-actions"><input ref={uploadInput} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={chooseAvatar} /><button className="button button-secondary" onClick={() => uploadInput.current?.click()}><Upload size={15} /> Загрузить аватар</button>{profile?.avatar_path && <button className="text-button danger-text" onClick={() => void onAvatar(null).catch((cause) => onNotice(errorMessage(cause), 'error'))}>Удалить</button>}<small>JPG, PNG или WebP · до 5 МБ</small></div></div>
-        <form className="settings-inline-form" onSubmit={saveName}><Field label="Имя"><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={80} placeholder="Ваше имя" /></Field><button className="button button-primary" disabled={profileBusy || !displayName.trim()}>{profileBusy ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />} Сохранить</button></form><p className="account-email">Аккаунт: {user.email}</p></section>
+      <section className="settings-card panel profile-settings"><div className="settings-card-heading"><span className="small-icon mint"><Users size={16} /></span><div><h3>Профиль</h3><p>Это имя увидит партнёр в общем календаре.</p></div></div><div className="profile-edit"><Avatar name={accountName(user, profile)} url={profile ? avatars[profile.id] : null} size="large" /><div className="profile-upload-actions"><input ref={uploadInput} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={chooseAvatar} /><button className="button button-secondary" onClick={() => uploadInput.current?.click()}><Upload size={15} /> Загрузить аватар</button>{profile?.avatar_path && <button className="text-button danger-text" onClick={() => void onAvatar(null).catch((cause) => onNotice(errorMessage(cause), 'error'))}>Удалить</button>}<small>JPG, PNG или WebP · до 5 МБ</small></div></div>
+        <form className="settings-inline-form" onSubmit={saveName}><Field label="Имя"><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={80} placeholder="Ваше имя" /></Field><button className="button button-primary" disabled={profileBusy || !displayName.trim()}>{profileBusy ? <LoaderCircle size={16} className="spin" /> : <Check size={16} />} Сохранить</button></form><p className="account-email">{user.app_metadata?.telegram_login ? 'Аккаунт создан через Telegram' : `Аккаунт: ${user.email}`}</p></section>
 
-      <section className="settings-card panel couple-settings"><div className="settings-card-heading"><span className="small-icon rose"><Heart size={16} /></span><div><h3>Календарь пары</h3><p>{couple.name} · {partner ? 'Вы уже вместе в календаре' : 'Пригласите второго участника'}</p></div></div><div className="partner-row"><div className="pair-avatars"><Avatar name={profile?.display_name || user.email || 'Вы'} url={profile ? avatars[profile.id] : null} /><Avatar name={partner?.display_name || 'Партнёр'} url={partner ? avatars[partner.id] : null} /></div><div><b>{partner?.display_name || 'Место для партнёра'}</b><small>{partner ? 'Участник календаря' : 'У каждого будет свой аккаунт'}</small></div></div>
+      <TelegramLinkCard user={user} onNotice={onNotice} />
+
+      <section className="settings-card panel couple-settings"><div className="settings-card-heading"><span className="small-icon rose"><Heart size={16} /></span><div><h3>Календарь пары</h3><p>{couple.name} · {partner ? 'Вы уже вместе в календаре' : 'Пригласите второго участника'}</p></div></div><div className="partner-row"><div className="pair-avatars"><Avatar name={accountName(user, profile)} url={profile ? avatars[profile.id] : null} /><Avatar name={partner?.display_name || 'Партнёр'} url={partner ? avatars[partner.id] : null} /></div><div><b>{partner?.display_name || 'Место для партнёра'}</b><small>{partner ? 'Участник календаря' : 'У каждого будет свой аккаунт'}</small></div></div>
         {!partner && <><button className="button button-primary" disabled={inviteBusy} onClick={() => void invite()}>{inviteBusy ? <LoaderCircle size={16} className="spin" /> : <Link2 size={16} />} Создать одноразовую ссылку</button><p className="settings-hint"><Shield size={14} /> Ссылка случайная, действует 7 дней и принимается один раз.</p>{link && <div className="invite-result"><label>Отправьте партнёру</label><div className="copy-row"><input readOnly value={link} /><button className="button button-secondary" onClick={async () => { try { await navigator.clipboard.writeText(link); onNotice('Ссылка скопирована.'); } catch { onNotice('Скопируйте ссылку вручную.', 'info'); } }}>Копировать</button></div></div>}</>}
       </section>
 
       <section className="settings-card panel"><div className="settings-card-heading"><span className="small-icon lavender"><Sun size={16} /></span><div><h3>Оформление</h3><p>Выберите, как выглядит приложение.</p></div></div><div className="theme-options">{[{ id: 'dark', label: 'Тёмная', icon: Moon }, { id: 'light', label: 'Светлая', icon: Sun }, { id: 'system', label: 'Системная', icon: Settings2 }].map(({ id, label, icon: Icon }) => <button key={id} className={`theme-option ${theme === id ? 'active' : ''}`} onClick={() => onTheme(id)}><Icon size={17} /><span>{label}</span>{theme === id && <Check size={15} />}</button>)}</div></section>
 
-      <section className="settings-card panel"><div className="settings-card-heading"><span className="small-icon amber"><Bell size={16} /></span><div><h3>Напоминания</h3><p>Показываем их, пока приложение запущено на этом устройстве.</p></div></div><div className="permission-row"><span className={`permission-indicator ${reminderPermission === 'granted' ? 'allowed' : ''}`} />{reminderPermission === 'granted' ? 'Разрешены' : reminderPermission === 'denied' ? 'Запрещены в настройках браузера' : reminderPermission === 'unsupported' ? 'Браузер не поддерживает уведомления' : 'Разрешение не запрашивалось'}</div>{reminderPermission !== 'granted' && reminderPermission !== 'unsupported' && <button className="button button-secondary" onClick={() => void requestReminders()}><Bell size={15} /> Запросить разрешение</button>}<p className="settings-hint">Фоновые push-уведомления, когда приложение закрыто, требуют отдельного push-сервера и здесь не настроены.</p></section>
+      <section className="settings-card panel"><div className="settings-card-heading"><span className="small-icon amber"><Bell size={16} /></span><div><h3>Напоминания</h3><p>Push может приходить, когда приложение закрыто, после настройки Supabase.</p></div></div><div className="permission-row"><span className={`permission-indicator ${reminderPermission === 'granted' ? 'allowed' : ''}`} />Разрешение браузера: {reminderPermission === 'granted' ? 'получено' : reminderPermission === 'denied' ? 'запрещено в настройках сайта' : reminderPermission === 'unsupported' ? 'не поддерживается' : 'не запрашивалось'}</div><div className="permission-row"><span className={`permission-indicator ${pushState === 'enabled' ? 'allowed' : ''}`} />Подписка на этом устройстве: {pushState === 'checking' ? 'проверяем…' : pushState === 'enabled' ? 'включена' : pushState === 'not-saved' ? 'не сохранена в Supabase' : pushState === 'unsupported' ? 'не поддерживается этим браузером' : 'выключена'}</div>{pushState === 'enabled' ? <button className="button button-secondary" disabled={pushBusy} onClick={() => void disablePush()}>{pushBusy ? <LoaderCircle size={15} className="spin" /> : <Bell size={15} />} Выключить push на этом устройстве</button> : <button className="button button-primary" disabled={pushBusy || pushState === 'checking' || pushState === 'unsupported'} onClick={() => void enablePush()}>{pushBusy ? <LoaderCircle size={15} className="spin" /> : <Bell size={15} />} Включить push на этом устройстве</button>}{!vapidPublicKey && <p className="settings-hint">Сборка сайта пока не получила публичный VAPID-ключ. Администратору нужно выполнить шаги из раздела «Push-уведомления» в инструкции.</p>}<p className="settings-hint">Каждый участник включает push на своём телефоне отдельно. Уведомления требуют интернета, разрешения браузера и настроенного Supabase; система может задержать доставку. Простые уведомления только в открытой вкладке продолжают работать без push-подписки.</p></section>
 
       <section className="settings-card panel tags-settings"><div className="settings-card-heading"><span className="small-icon mint"><Tag size={16} /></span><div><h3>Теги</h3><p>Общие метки для событий, идей и опросов.</p></div></div><form className="tag-add-form" onSubmit={(e) => void saveTag(e)}><input aria-label="Название тега" value={tagName} onChange={(e) => setTagName(e.target.value)} placeholder="Новый тег" maxLength={32} required /><input type="color" aria-label="Цвет тега" value={tagColor} onChange={(e) => setTagColor(e.target.value)} /><button className="button button-secondary" disabled={tagBusy || !tagName.trim()}><Plus size={15} /> Добавить</button></form><div className="tag-list settings-tag-list">{tags.map((tag) => <span className="tag-chip" key={tag.id} style={{ '--tag-color': tag.color } as React.CSSProperties}><i />{tag.label}<button aria-label={`Удалить тег ${tag.label}`} onClick={() => void onDeleteTag(tag).catch((cause) => onNotice(errorMessage(cause), 'error'))}><X size={12} /></button></span>)}{!tags.length && <small>Добавьте первый тег.</small>}</div></section>
 

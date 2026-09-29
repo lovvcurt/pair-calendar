@@ -315,6 +315,8 @@ input[type=checkbox], input[type=radio] { width: 15px; height: 15px; accent-colo
 .auth-card { width: min(100%, 420px); padding: 27px; border-radius: 22px; box-shadow: var(--shadow); }
 .auth-intro { margin: 30px 0 23px; }.auth-intro h1, .auth-card > h1 { margin: 0 0 8px; font-family: var(--font-display); font-size: 25px; letter-spacing: -.8px; }.auth-intro p, .auth-card > p { margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
 .auth-links { display: grid; justify-items: center; gap: 9px; margin-top: 17px; }.auth-links .text-button { font-size: 10px; }
+.auth-telegram { display: grid; gap: 9px; margin-top: 16px; }.auth-telegram > p:not(.form-error) { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.55; text-align: center; }
+.auth-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 9px; }.auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: var(--border-soft); }
 .auth-card .fine-print { justify-content: center; margin-top: 19px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
 .form-error, .form-success { display: flex; align-items: flex-start; gap: 7px; margin: 0; color: var(--danger); font-size: 10px; line-height: 1.55; }.form-success { color: var(--mint); }
 .config-icon { display: grid; place-items: center; width: 48px; height: 48px; margin: 25px 0 17px; border-radius: 15px; color: var(--mint); background: color-mix(in srgb, var(--mint) 11%, var(--panel-raised)); }.auth-card > h1 + p { margin-bottom: 18px; }

@@ -26,12 +26,33 @@ self.addEventListener('fetch', (event) => {
     return cached || Response.error();
   }));
 });
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try { payload = event.data ? event.data.json() : {}; }
+  catch { payload = { body: event.data?.text() ?? '' }; }
+  const title = typeof payload.title === 'string' ? payload.title : 'Напоминание';
+  const body = typeof payload.body === 'string' ? payload.body : 'Откройте календарь, чтобы посмотреть планы.';
+  const icon = new URL('icons/icon-192.png', self.registration.scope).href;
+  event.waitUntil(self.registration.showNotification(title, {
+    body,
+    icon,
+    badge: icon,
+    tag: typeof payload.tag === 'string' ? payload.tag : undefined,
+    data: { url: typeof payload.url === 'string' ? payload.url : './' },
+  }));
+});
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+  event.waitUntil((async () => {
+    let target = new URL(event.notification.data?.url ?? './', self.registration.scope);
+    if (target.origin !== self.location.origin || !target.href.startsWith(self.registration.scope)) target = new URL(self.registration.scope);
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const client = clients.find((entry) => 'focus' in entry);
-    return client ? client.focus() : self.clients.openWindow('./');
-  }));
+    if (client) {
+      if ('navigate' in client) await client.navigate(target.href);
+      await client.focus();
+    } else await self.clients.openWindow(target.href);
+  })());
 });
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting();
