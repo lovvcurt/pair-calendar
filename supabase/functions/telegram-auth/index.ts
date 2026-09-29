@@ -3,10 +3,17 @@ import { createClient } from 'supabase';
 type TelegramUser = { id: number; first_name: string; last_name?: string; is_bot?: boolean };
 type VerifiedTelegramUser = { id: string; displayName: string };
 type LinkRow = { user_id: string };
+type TelegramClaims = {
+  iss?: unknown; aud?: unknown; sub?: unknown; id?: unknown; exp?: unknown; iat?: unknown;
+  azp?: unknown; nonce?: unknown; name?: unknown; given_name?: unknown; family_name?: unknown;
+};
+type TelegramJwk = JsonWebKey & { kid?: string; alg?: string; use?: string };
 
 const encoder = new TextEncoder();
 const maxInitDataAgeSeconds = 60 * 60;
 const futureClockToleranceSeconds = 5 * 60;
+const webChallengeLifetimeSeconds = 5 * 60;
+let jwksCache: { keys: TelegramJwk[]; expiresAt: number } | null = null;
 
 class ClientError extends Error {}
 
@@ -39,16 +46,32 @@ function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function fromBase64Url(value: string): Uint8Array {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new ClientError('Telegram передал некорректный токен.');
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
+  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+}
+
 async function hmac(keyBytes: Uint8Array, value: string): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(value)));
 }
 
-function constantTimeHexEqual(left: string, right: string): boolean {
+function constantTimeEqual(left: string, right: string): boolean {
   if (left.length !== right.length) return false;
   let difference = 0;
   for (let index = 0; index < left.length; index++) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
   return difference === 0;
+}
+
+function cleanDisplayName(value: unknown): string {
+  return (typeof value === 'string' ? value : '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80) || 'Пользователь Telegram';
 }
 
 async function verifyTelegramInitData(initData: unknown, botToken: string): Promise<VerifiedTelegramUser> {
@@ -64,7 +87,7 @@ async function verifyTelegramInitData(initData: unknown, botToken: string): Prom
   // then HMAC with that derived key and the data-check-string as the message.
   const secretKey = await hmac(encoder.encode('WebAppData'), botToken);
   const expectedHash = hex(await hmac(secretKey, dataCheckString));
-  if (!constantTimeHexEqual(expectedHash, hash.toLowerCase())) throw new ClientError('Не удалось проверить подпись Telegram. Откройте Mini App через вашего бота.');
+  if (!constantTimeEqual(expectedHash, hash.toLowerCase())) throw new ClientError('Не удалось проверить подпись Telegram. Откройте Mini App через вашего бота.');
 
   const authDateValue = params.get('auth_date') ?? '';
   if (!/^\d{1,12}$/.test(authDateValue)) throw new ClientError('В данных Telegram нет времени входа.');
@@ -78,7 +101,83 @@ async function verifyTelegramInitData(initData: unknown, botToken: string): Prom
   if (!Number.isSafeInteger(user.id) || user.id <= 0 || user.is_bot) throw new ClientError('Telegram передал недопустимый аккаунт.');
   const id = String(user.id);
   if (!/^[1-9][0-9]{0,15}$/.test(id)) throw new ClientError('Номер аккаунта Telegram имеет неверный формат.');
-  const displayName = [user.first_name, user.last_name].filter((part) => typeof part === 'string').join(' ').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80) || 'Пользователь Telegram';
+  const displayName = cleanDisplayName([user.first_name, user.last_name].filter((part) => typeof part === 'string').join(' '));
+  return { id, displayName };
+}
+
+function randomBytes(size: number): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(size));
+}
+
+async function createWebChallenge(authSecret: string) {
+  const nonce = base64Url(randomBytes(32));
+  const expiresAt = Math.floor(Date.now() / 1000) + webChallengeLifetimeSeconds;
+  const payload = `${nonce}.${expiresAt}.${base64Url(randomBytes(16))}`;
+  const signature = base64Url(await hmac(encoder.encode(authSecret), payload));
+  return { nonce, challengeToken: `${base64Url(encoder.encode(payload))}.${signature}` };
+}
+
+async function verifyWebChallenge(challengeToken: unknown, nonce: unknown, authSecret: string): Promise<string> {
+  if (typeof challengeToken !== 'string' || challengeToken.length > 512 || typeof nonce !== 'string' || nonce.length > 128) {
+    throw new ClientError('Не удалось проверить запрос входа. Нажмите кнопку входа ещё раз.');
+  }
+  const [encodedPayload, signature, extra] = challengeToken.split('.');
+  if (!encodedPayload || !signature || extra !== undefined) throw new ClientError('Запрос входа устарел. Нажмите кнопку ещё раз.');
+  let payload: string;
+  try { payload = new TextDecoder().decode(fromBase64Url(encodedPayload)); }
+  catch { throw new ClientError('Запрос входа повреждён. Нажмите кнопку ещё раз.'); }
+  const expectedSignature = base64Url(await hmac(encoder.encode(authSecret), payload));
+  if (!constantTimeEqual(expectedSignature, signature)) throw new ClientError('Не удалось проверить запрос входа. Нажмите кнопку ещё раз.');
+  const [issuedNonce, expiryText, randomPart, trailing] = payload.split('.');
+  const expiresAt = Number(expiryText);
+  const now = Math.floor(Date.now() / 1000);
+  if (trailing !== undefined || !issuedNonce || !randomPart || issuedNonce !== nonce || !Number.isSafeInteger(expiresAt) || expiresAt <= now || expiresAt > now + webChallengeLifetimeSeconds + 10) {
+    throw new ClientError('Время входа истекло. Нажмите кнопку ещё раз.');
+  }
+  return issuedNonce;
+}
+
+async function telegramJwks(): Promise<TelegramJwk[]> {
+  const now = Date.now();
+  if (jwksCache && jwksCache.expiresAt > now) return jwksCache.keys;
+  const response = await fetch('https://oauth.telegram.org/.well-known/jwks.json', { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error('Telegram signing keys could not be loaded');
+  const payload = await response.json() as { keys?: TelegramJwk[] };
+  if (!Array.isArray(payload.keys) || payload.keys.length === 0) throw new Error('Telegram signing keys are unavailable');
+  jwksCache = { keys: payload.keys, expiresAt: now + 10 * 60 * 1000 };
+  return payload.keys;
+}
+
+async function verifyTelegramLoginToken(idToken: unknown, expectedNonce: string, clientId: string): Promise<VerifiedTelegramUser> {
+  if (typeof idToken !== 'string' || idToken.length < 1 || idToken.length > 12_000) throw new ClientError('Telegram не вернул корректное подтверждение входа. Попробуйте ещё раз.');
+  const parts = idToken.split('.');
+  if (parts.length !== 3) throw new ClientError('Telegram передал некорректное подтверждение входа.');
+  let header: { alg?: unknown; kid?: unknown };
+  let claims: TelegramClaims;
+  try {
+    header = JSON.parse(new TextDecoder().decode(fromBase64Url(parts[0]))) as { alg?: unknown; kid?: unknown };
+    claims = JSON.parse(new TextDecoder().decode(fromBase64Url(parts[1]))) as TelegramClaims;
+  } catch { throw new ClientError('Telegram передал некорректное подтверждение входа.'); }
+  if (header.alg !== 'RS256' || typeof header.kid !== 'string') throw new ClientError('Не удалось проверить подпись Telegram.');
+  const key = (await telegramJwks()).find((candidate) => candidate.kid === header.kid && candidate.kty === 'RSA' && (!candidate.use || candidate.use === 'sig') && (!candidate.alg || candidate.alg === 'RS256'));
+  if (!key) throw new ClientError('Не найдена ключевая подпись Telegram. Повторите вход через минуту.');
+  const importedKey = await crypto.subtle.importKey('jwk', key, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+  const signedText = encoder.encode(`${parts[0]}.${parts[1]}`);
+  let validSignature = false;
+  try { validSignature = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', importedKey, fromBase64Url(parts[2]), signedText); }
+  catch { validSignature = false; }
+  if (!validSignature) throw new ClientError('Не удалось проверить подпись Telegram.');
+
+  const audience = claims.aud;
+  const audienceMatches = audience === clientId || (Array.isArray(audience) && audience.includes(clientId));
+  const authorizedPartyMatches = !Array.isArray(audience) || audience.length <= 1 || claims.azp === clientId;
+  const now = Math.floor(Date.now() / 1000);
+  if (claims.iss !== 'https://oauth.telegram.org' || !audienceMatches || !authorizedPartyMatches || typeof claims.exp !== 'number' || claims.exp <= now || typeof claims.iat !== 'number' || claims.exp <= claims.iat || claims.exp - claims.iat > 60 * 60 || claims.iat > now + futureClockToleranceSeconds || now - claims.iat > webChallengeLifetimeSeconds + futureClockToleranceSeconds || claims.nonce !== expectedNonce) {
+    throw new ClientError('Вход Telegram истёк или не совпал с настройками бота. Нажмите кнопку ещё раз.');
+  }
+  const id = typeof claims.sub === 'string' ? claims.sub : '';
+  if (!/^[1-9][0-9]{0,19}$/.test(id) || (claims.id !== undefined && String(claims.id) !== id)) throw new ClientError('Telegram передал недопустимый аккаунт.');
+  const displayName = cleanDisplayName(claims.name ?? [claims.given_name, claims.family_name].filter((part) => typeof part === 'string').join(' '));
   return { id, displayName };
 }
 
@@ -89,8 +188,7 @@ function getBearerToken(request: Request): string | null {
 }
 
 function randomPassword(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return hex(bytes);
+  return hex(randomBytes(32));
 }
 
 async function telegramEmail(telegramUserId: string, authSecret: string): Promise<string> {
@@ -110,19 +208,23 @@ Deno.serve(async (request) => {
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
   const botToken = Deno.env.get('TELEGRAM_BOT_TOKEN') ?? '';
   const authSecret = Deno.env.get('TELEGRAM_AUTH_SECRET') ?? '';
-  if (!supabaseUrl || !serviceRoleKey || !botToken || !authSecret) {
+  if (!supabaseUrl || !serviceRoleKey || !authSecret) {
     return respond(request, origins, { error: 'Серверная функция Telegram не настроена. Проверьте её Secrets в Supabase.' }, 503);
   }
 
-  let body: { action?: unknown; initData?: unknown };
+  let body: { action?: unknown; initData?: unknown; idToken?: unknown; nonce?: unknown; challengeToken?: unknown };
   try {
     const parsed = await request.json();
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return respond(request, origins, { error: 'Некорректное тело запроса.' }, 400);
-    body = parsed as { action?: unknown; initData?: unknown };
+    body = parsed as typeof body;
   }
   catch { return respond(request, origins, { error: 'Не удалось прочитать запрос.' }, 400); }
-  if (typeof body.action !== 'string' || !['login', 'status', 'link'].includes(body.action)) {
-    return respond(request, origins, { error: 'Неизвестное действие.' }, 400);
+  const actions = ['login', 'status', 'link', 'web_challenge', 'web_login', 'web_link'];
+  if (typeof body.action !== 'string' || !actions.includes(body.action)) return respond(request, origins, { error: 'Неизвестное действие.' }, 400);
+  if (['login', 'link'].includes(body.action) && !botToken) return respond(request, origins, { error: 'В Supabase не настроен TELEGRAM_BOT_TOKEN для Mini App.' }, 503);
+  const telegramLoginClientId = Deno.env.get('TELEGRAM_LOGIN_CLIENT_ID') ?? '';
+  if (['web_challenge', 'web_login', 'web_link'].includes(body.action) && !telegramLoginClientId) {
+    return respond(request, origins, { error: 'В Supabase не настроен TELEGRAM_LOGIN_CLIENT_ID.' }, 503);
   }
 
   const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -136,8 +238,7 @@ Deno.serve(async (request) => {
   async function issueSession(userId: string) {
     const { data: userData, error: userError } = await admin.auth.admin.getUserById(userId);
     if (userError || !userData.user?.email) throw new ClientError('Не удалось найти аккаунт Supabase для Telegram.');
-    const email = userData.user.email;
-    const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({ type: 'magiclink', email });
+    const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({ type: 'magiclink', email: userData.user.email });
     if (linkError || !linkData.properties?.hashed_token) throw new ClientError('Supabase не смог подготовить безопасный вход.');
 
     // Admin.generateLink only creates an OTP; it does not send an email. Verify
@@ -152,67 +253,89 @@ Deno.serve(async (request) => {
     return { access_token: sessionData.session.access_token, refresh_token: sessionData.session.refresh_token };
   }
 
+  async function getOrCreateAccount(telegramUser: VerifiedTelegramUser): Promise<LinkRow> {
+    let mapping = await findLink('telegram_user_id', telegramUser.id);
+    if (mapping) return mapping;
+    const email = await telegramEmail(telegramUser.id, authSecret);
+    const { data: created, error: createError } = await admin.auth.admin.createUser({
+      email,
+      password: randomPassword(),
+      email_confirm: true,
+      user_metadata: { display_name: telegramUser.displayName },
+      app_metadata: { telegram_login: true },
+    });
+    if (createError || !created.user) {
+      // Another click/device may have won the unique synthetic email race.
+      for (let attempt = 0; attempt < 5 && !mapping; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        mapping = await findLink('telegram_user_id', telegramUser.id);
+      }
+      if (!mapping) throw new ClientError('Не удалось создать аккаунт Telegram. Попробуйте ещё раз.');
+      return mapping;
+    }
+    const { error: insertError } = await admin.from('telegram_accounts').insert({ telegram_user_id: telegramUser.id, user_id: created.user.id });
+    if (insertError) {
+      await admin.auth.admin.deleteUser(created.user.id);
+      for (let attempt = 0; attempt < 5 && !mapping; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        mapping = await findLink('telegram_user_id', telegramUser.id);
+      }
+      if (!mapping) throw new ClientError('Не удалось сохранить привязку Telegram. Повторите попытку.');
+      return mapping;
+    }
+    return { user_id: created.user.id };
+  }
+
+  async function linkAccount(userId: string, telegramUser: VerifiedTelegramUser) {
+    const accountForTelegram = await findLink('telegram_user_id', telegramUser.id);
+    if (accountForTelegram) {
+      if (accountForTelegram.user_id === userId) return { linked: true, alreadyLinked: true };
+      throw new ClientError('Этот Telegram уже связан с другим аккаунтом календаря. Войдите именно в него; аккаунты автоматически не объединяются.');
+    }
+    const accountForSupabase = await findLink('user_id', userId);
+    if (accountForSupabase) throw new ClientError('К этому аккаунту календаря уже привязан другой Telegram.');
+    const { error: insertError } = await admin.from('telegram_accounts').insert({ telegram_user_id: telegramUser.id, user_id: userId });
+    if (insertError) {
+      if (insertError.code === '23505') throw new ClientError('Привязка уже изменилась. Обновите страницу и проверьте её статус.');
+      throw insertError;
+    }
+    return { linked: true };
+  }
+
+  async function currentUserId(): Promise<string> {
+    const token = getBearerToken(request);
+    if (!token) throw new ClientError('Сначала войдите в аккаунт календаря, который хотите связать.');
+    const { data, error } = await admin.auth.getUser(token);
+    if (error || !data.user) throw new ClientError('Сессия Supabase устарела. Войдите снова.');
+    return data.user.id;
+  }
+
   try {
     if (body.action === 'status') {
-      const token = getBearerToken(request);
-      if (!token) return respond(request, origins, { error: 'Сначала войдите в аккаунт календаря.' }, 401);
-      const { data: authData, error: authError } = await admin.auth.getUser(token);
-      if (authError || !authData.user) return respond(request, origins, { error: 'Сессия Supabase устарела. Войдите снова.' }, 401);
-      const link = await findLink('user_id', authData.user.id);
-      return respond(request, origins, { linked: Boolean(link) });
+      const userId = await currentUserId();
+      return respond(request, origins, { linked: Boolean(await findLink('user_id', userId)) });
     }
 
-    if (body.action === 'link') {
-      const token = getBearerToken(request);
-      if (!token) return respond(request, origins, { error: 'Сначала войдите в тот аккаунт, который хотите связать.' }, 401);
-      const { data: authData, error: authError } = await admin.auth.getUser(token);
-      if (authError || !authData.user) return respond(request, origins, { error: 'Сессия Supabase устарела. Войдите снова.' }, 401);
-      const telegramUser = await verifyTelegramInitData(body.initData, botToken);
-      const accountForTelegram = await findLink('telegram_user_id', telegramUser.id);
-      if (accountForTelegram) {
-        if (accountForTelegram.user_id === authData.user.id) return respond(request, origins, { linked: true, alreadyLinked: true });
-        return respond(request, origins, { error: 'Этот Telegram уже связан с другим аккаунтом календаря. Войдите именно в него; аккаунты автоматически не объединяются.' }, 409);
+    if (body.action === 'web_challenge') return respond(request, origins, await createWebChallenge(authSecret));
+
+    if (body.action === 'link' || body.action === 'web_link') {
+      const userId = await currentUserId();
+      let telegramUser: VerifiedTelegramUser;
+      if (body.action === 'link') telegramUser = await verifyTelegramInitData(body.initData, botToken);
+      else {
+        const expectedNonce = await verifyWebChallenge(body.challengeToken, body.nonce, authSecret);
+        telegramUser = await verifyTelegramLoginToken(body.idToken, expectedNonce, telegramLoginClientId);
       }
-      const accountForSupabase = await findLink('user_id', authData.user.id);
-      if (accountForSupabase) return respond(request, origins, { error: 'К этому аккаунту календаря уже привязан другой Telegram.' }, 409);
-      const { error: insertError } = await admin.from('telegram_accounts').insert({ telegram_user_id: telegramUser.id, user_id: authData.user.id });
-      if (insertError) {
-        if (insertError.code === '23505') return respond(request, origins, { error: 'Привязка уже изменилась. Обновите страницу и проверьте её статус.' }, 409);
-        throw insertError;
-      }
-      return respond(request, origins, { linked: true });
+      return respond(request, origins, await linkAccount(userId, telegramUser));
     }
 
-    const telegramUser = await verifyTelegramInitData(body.initData, botToken);
-    let mapping = await findLink('telegram_user_id', telegramUser.id);
-    if (!mapping) {
-      const email = await telegramEmail(telegramUser.id, authSecret);
-      const { data: created, error: createError } = await admin.auth.admin.createUser({
-        email,
-        password: randomPassword(),
-        email_confirm: true,
-        user_metadata: { display_name: telegramUser.displayName },
-        app_metadata: { telegram_login: true },
-      });
-      if (createError || !created.user) {
-        // Another click/device may have won the unique synthetic email race.
-        for (let attempt = 0; attempt < 5 && !mapping; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
-          mapping = await findLink('telegram_user_id', telegramUser.id);
-        }
-        if (!mapping) return respond(request, origins, { error: 'Не удалось создать аккаунт Telegram. Попробуйте открыть Mini App ещё раз.' }, 409);
-      } else {
-        const { error: insertError } = await admin.from('telegram_accounts').insert({ telegram_user_id: telegramUser.id, user_id: created.user.id });
-        if (insertError) {
-          await admin.auth.admin.deleteUser(created.user.id);
-          for (let attempt = 0; attempt < 5 && !mapping; attempt++) {
-            await new Promise((resolve) => setTimeout(resolve, 200));
-            mapping = await findLink('telegram_user_id', telegramUser.id);
-          }
-          if (!mapping) return respond(request, origins, { error: 'Не удалось сохранить привязку Telegram. Повторите попытку.' }, 409);
-        } else mapping = { user_id: created.user.id };
-      }
+    let telegramUser: VerifiedTelegramUser;
+    if (body.action === 'login') telegramUser = await verifyTelegramInitData(body.initData, botToken);
+    else {
+      const expectedNonce = await verifyWebChallenge(body.challengeToken, body.nonce, authSecret);
+      telegramUser = await verifyTelegramLoginToken(body.idToken, expectedNonce, telegramLoginClientId);
     }
+    const mapping = await getOrCreateAccount(telegramUser);
     return respond(request, origins, await issueSession(mapping.user_id));
   } catch (error) {
     if (error instanceof ClientError) return respond(request, origins, { error: error.message }, 400);

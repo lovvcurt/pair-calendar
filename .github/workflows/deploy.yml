@@ -35,6 +35,7 @@ jobs:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
           VITE_VAPID_PUBLIC_KEY: ${{ vars.VITE_VAPID_PUBLIC_KEY }}
+          VITE_TELEGRAM_LOGIN_CLIENT_ID: ${{ vars.VITE_TELEGRAM_LOGIN_CLIENT_ID }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

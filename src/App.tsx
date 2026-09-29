@@ -15,7 +15,7 @@ import {
 } from './lib/calendar';
 import type { CalendarEvent, EventDetails, Visibility } from './lib/calendar';
 import { exportCalendar, parseCalendar, type ImportedEvent } from './lib/ics';
-import { getTelegramInitData } from './lib/telegram';
+import { getTelegramInitData, loadTelegramLoginSdk, openTelegramLogin } from './lib/telegram';
 
 type Tab = 'calendar' | 'polls' | 'ideas' | 'settings';
 type Profile = { id: string; display_name: string; avatar_path: string | null };
@@ -98,6 +98,25 @@ function AuthScreen({ invitePending }: { invitePending: boolean }) {
   const [mode, setMode] = useState<'login' | 'signup' | 'reset'>('login');
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [error, setError] = useState('');
   const [telegramBusy, setTelegramBusy] = useState(false); const [telegramError, setTelegramError] = useState('');
+  const [webTelegramReady, setWebTelegramReady] = useState(false);
+  const [webTelegramChallenge, setWebTelegramChallenge] = useState<{ nonce: string; challengeToken: string } | null>(null);
+  const webTelegramClientId = import.meta.env.VITE_TELEGRAM_LOGIN_CLIENT_ID?.trim() ?? '';
+  const inTelegramMiniApp = Boolean(getTelegramInitData());
+  useEffect(() => {
+    if (!webTelegramClientId || inTelegramMiniApp) return;
+    let active = true;
+    void Promise.all([
+      loadTelegramLoginSdk(),
+      callTelegramFunction<{ nonce: string; challengeToken: string }>({ action: 'web_challenge' }),
+    ]).then(([, challenge]) => {
+      if (!active) return;
+      setWebTelegramChallenge(challenge);
+      setWebTelegramReady(true);
+    }).catch((cause) => {
+      if (active) setTelegramError(errorMessage(cause));
+    });
+    return () => { active = false; };
+  }, [webTelegramClientId, inTelegramMiniApp]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!supabase) return;
     setBusy(true); setError(''); setMessage('');
@@ -129,6 +148,27 @@ function AuthScreen({ invitePending }: { invitePending: boolean }) {
     } catch (cause) { setTelegramError(errorMessage(cause)); }
     finally { setTelegramBusy(false); }
   }
+  async function signInWithWebsiteTelegram() {
+    if (!supabase || !webTelegramClientId || !webTelegramChallenge || !webTelegramReady) return;
+    const challenge = webTelegramChallenge;
+    setWebTelegramChallenge(null);
+    setTelegramBusy(true); setTelegramError('');
+    try {
+      // Open the popup immediately from the click handler. Preparing it after an
+      // await can make mobile browsers block the Telegram window.
+      const idToken = await openTelegramLogin(webTelegramClientId, challenge.nonce);
+      const result = await callTelegramFunction<{ access_token: string; refresh_token: string }>({
+        action: 'web_login', idToken, nonce: challenge.nonce, challengeToken: challenge.challengeToken,
+      });
+      const { error: sessionError } = await supabase.auth.setSession({ access_token: result.access_token, refresh_token: result.refresh_token });
+      if (sessionError) throw sessionError;
+    } catch (cause) { setTelegramError(errorMessage(cause)); }
+    finally {
+      setTelegramBusy(false);
+      void callTelegramFunction<{ nonce: string; challengeToken: string }>({ action: 'web_challenge' })
+        .then(setWebTelegramChallenge).catch(() => setWebTelegramChallenge(null));
+    }
+  }
   const title = mode === 'signup' ? 'Создайте аккаунт' : mode === 'reset' ? 'Восстановление доступа' : 'Рады видеть вас';
   return <main className="auth-screen"><div className="auth-card panel">
     <Brand /><div className="auth-intro"><h1>{title}</h1><p>{invitePending ? 'Войдите или зарегистрируйтесь, чтобы принять приглашение партнёра.' : 'Ваше общее место для планов, встреч и маленьких поводов быть рядом.'}</p></div>
@@ -139,7 +179,14 @@ function AuthScreen({ invitePending }: { invitePending: boolean }) {
       {error && <p className="form-error">{error}</p>}{message && <p className="form-success">{message}</p>}
       <button className="button button-primary button-block" disabled={busy}>{busy && <LoaderCircle className="spin" size={17} />}{mode === 'signup' ? 'Создать аккаунт' : mode === 'reset' ? 'Отправить письмо' : 'Войти'}</button>
     </form>
-    {getTelegramInitData() && mode !== 'reset' && <div className="auth-telegram"><span className="auth-divider">или</span>{telegramError && <p className="form-error">{telegramError}</p>}<button className="button button-secondary button-block" disabled={telegramBusy} onClick={() => void signInWithTelegram()}>{telegramBusy ? <LoaderCircle className="spin" size={17} /> : <Send size={16} />} Продолжить через Telegram</button><p>Если Telegram уже привязан, откроется существующий аккаунт. Для уже созданного календаря сначала войдите по email и привяжите Telegram в настройках, иначе появится отдельный аккаунт.</p><p>Если вход не настроен, <a href={`${import.meta.env.BASE_URL}guide.html#telegram-auth`}>откройте инструкцию</a>.</p></div>}
+    {mode !== 'reset' && <div className="auth-telegram"><span className="auth-divider">или</span>
+      {telegramError && <p className="form-error">{telegramError}</p>}
+      {inTelegramMiniApp
+        ? <button className="button button-secondary button-block" disabled={telegramBusy} onClick={() => void signInWithTelegram()}>{telegramBusy ? <LoaderCircle className="spin" size={17} /> : <Send size={16} />} Продолжить через Telegram</button>
+        : <button className="button button-secondary button-block" disabled={telegramBusy || !webTelegramClientId || !webTelegramReady || !webTelegramChallenge} onClick={() => void signInWithWebsiteTelegram()}>{telegramBusy ? <LoaderCircle className="spin" size={17} /> : <Send size={16} />} {webTelegramClientId ? webTelegramReady ? 'Продолжить через Telegram' : 'Подготавливаем вход через Telegram…' : 'Вход через Telegram не настроен'}</button>}
+      <p>Если Telegram уже связан с календарём, откроется этот же аккаунт. Иначе будет создан новый аккаунт. Чтобы сохранить календарь, сначала войдите в него и привяжите Telegram в настройках.</p>
+      <p>Инструкция: <a href={`${import.meta.env.BASE_URL}guide.html#telegram-web-login`}>вход через Telegram на сайте</a> · <a href={`${import.meta.env.BASE_URL}guide.html#telegram-auth`}>Mini App</a></p>
+    </div>}
     <div className="auth-links">
       {mode === 'login' && <button className="text-button" onClick={() => setMode('reset')}>Забыли пароль?</button>}
       <button className="text-button" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); setMessage(''); }}>{mode === 'signup' ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Зарегистрироваться'}</button>
@@ -152,7 +199,10 @@ function AuthScreen({ invitePending }: { invitePending: boolean }) {
 function TelegramLinkCard({ user, onNotice }: { user: User; onNotice: (text: string, kind?: 'success' | 'error' | 'info') => void }) {
   const [state, setState] = useState<'checking' | 'linked' | 'unlinked' | 'unavailable'>('checking');
   const [busy, setBusy] = useState(false);
+  const [webReady, setWebReady] = useState(false);
+  const [webChallenge, setWebChallenge] = useState<{ nonce: string; challengeToken: string } | null>(null);
   const initData = getTelegramInitData();
+  const webClientId = import.meta.env.VITE_TELEGRAM_LOGIN_CLIENT_ID?.trim() ?? '';
   useEffect(() => {
     let active = true;
     void callTelegramFunction<{ linked: boolean }>({ action: 'status' })
@@ -160,18 +210,50 @@ function TelegramLinkCard({ user, onNotice }: { user: User; onNotice: (text: str
       .catch(() => { if (active) setState('unavailable'); });
     return () => { active = false; };
   }, [user.id]);
+  useEffect(() => {
+    if (initData || !webClientId) return;
+    let active = true;
+    void Promise.all([
+      loadTelegramLoginSdk(),
+      callTelegramFunction<{ nonce: string; challengeToken: string }>({ action: 'web_challenge' }),
+    ]).then(([, challenge]) => {
+      if (!active) return;
+      setWebChallenge(challenge);
+      setWebReady(true);
+    }).catch(() => { if (active) setWebReady(false); });
+    return () => { active = false; };
+  }, [initData, webClientId]);
   async function linkTelegram() {
     if (!initData) return;
     setBusy(true);
     try {
       await callTelegramFunction<{ linked: boolean }>({ action: 'link', initData });
       setState('linked');
-      onNotice('Telegram привязан к этому аккаунту. Теперь через него можно входить в Mini App.');
+      onNotice('Telegram привязан к этому аккаунту. Теперь через него можно входить на сайт и в Mini App.');
     } catch (cause) { onNotice(errorMessage(cause), 'error'); }
     finally { setBusy(false); }
   }
-  return <section className="settings-card panel telegram-settings"><div className="settings-card-heading"><span className="small-icon mint"><Send size={16} /></span><div><h3>Вход через Telegram</h3><p>Привяжите Mini App к уже созданному аккаунту календаря.</p></div></div>
-    {state === 'checking' ? <p className="settings-hint">Проверяем привязку…</p> : state === 'unavailable' ? <><p className="settings-hint">Серверная функция входа через Telegram ещё не настроена или недоступна.</p><a className="text-button" href={`${import.meta.env.BASE_URL}guide.html#telegram-auth`}>Открыть инструкцию по настройке</a></> : state === 'linked' ? <p className="settings-hint"><CheckCircle2 size={15} /> Telegram уже связан с этим аккаунтом.</p> : initData ? <><button className="button button-secondary" disabled={busy} onClick={() => void linkTelegram()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Link2 size={16} />} Привязать Telegram</button><p className="settings-hint">Откройте этот экран из Telegram Mini App. Мы привяжем текущий аккаунт, в который вы вошли.</p></> : <p className="settings-hint">Чтобы привязать Telegram, откройте календарь из Mini App и войдите здесь в свой обычный аккаунт.</p>}
+  async function linkWebsiteTelegram() {
+    if (!webChallenge || !webClientId || !webReady) return;
+    const challenge = webChallenge;
+    setWebChallenge(null);
+    setBusy(true);
+    try {
+      const idToken = await openTelegramLogin(webClientId, challenge.nonce);
+      await callTelegramFunction<{ linked: boolean }>({ action: 'web_link', idToken, nonce: challenge.nonce, challengeToken: challenge.challengeToken });
+      setState('linked');
+      onNotice('Telegram привязан к этому аккаунту. Теперь через него можно входить на сайт и в Mini App.');
+    } catch (cause) { onNotice(errorMessage(cause), 'error'); }
+    finally {
+      setBusy(false);
+      void callTelegramFunction<{ nonce: string; challengeToken: string }>({ action: 'web_challenge' })
+        .then(setWebChallenge).catch(() => setWebChallenge(null));
+    }
+  }
+  return <section className="settings-card panel telegram-settings"><div className="settings-card-heading"><span className="small-icon mint"><Send size={16} /></span><div><h3>Вход через Telegram</h3><p>Свяжите Telegram с аккаунтом календаря, чтобы входить на сайт и в Mini App.</p></div></div>
+    {state === 'checking' ? <p className="settings-hint">Проверяем привязку…</p> : state === 'unavailable' ? <><p className="settings-hint">Серверная функция входа через Telegram ещё не настроена или недоступна.</p><a className="text-button" href={`${import.meta.env.BASE_URL}guide.html#telegram-web-login`}>Открыть инструкцию по настройке Telegram</a></> : state === 'linked' ? <p className="settings-hint"><CheckCircle2 size={15} /> Telegram уже связан с этим аккаунтом.</p> : state === 'unlinked' && initData ? <><button className="button button-secondary" disabled={busy} onClick={() => void linkTelegram()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Link2 size={16} />} Привязать Telegram</button><p className="settings-hint">Откройте этот экран из Telegram Mini App. Мы привяжем текущий аккаунт, в который вы вошли.</p></> : null}
+    {state === 'unlinked' && !initData && webClientId && <><button className="button button-secondary" disabled={busy || !webReady || !webChallenge} onClick={() => void linkWebsiteTelegram()}>{busy ? <LoaderCircle className="spin" size={16} /> : <Link2 size={16} />} {webReady ? 'Привязать Telegram' : 'Подготавливаем вход…'}</button><p className="settings-hint">Подтвердите вход в окне Telegram. Привязка добавит этот способ входа к открытому аккаунту.</p></>}
+    {state === 'unlinked' && !initData && !webClientId && <><p className="settings-hint">Чтобы связать аккаунты прямо на сайте, сначала включите Telegram Login.</p><a className="text-button" href={`${import.meta.env.BASE_URL}guide.html#telegram-web-login`}>Открыть инструкцию по настройке</a></>}
     <p className="settings-hint">Привязка не объединяет разные календари. Она добавляет Telegram как способ входа именно в этот аккаунт.</p>
   </section>;
 }

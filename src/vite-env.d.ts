@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_VAPID_PUBLIC_KEY: string;
+  readonly VITE_TELEGRAM_LOGIN_CLIENT_ID: string;
 }
 
 interface ImportMeta {
