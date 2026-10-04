@@ -350,3 +350,37 @@ input[type=checkbox], input[type=radio] { width: 15px; height: 15px; accent-colo
   .dialog-mobile-full-height > .dialog-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .event-time-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Monthly calendar: highlight genuinely free days and keep partner ownership visible. */
+.day-cell.free-day {
+  background: color-mix(in srgb, var(--mint) 9%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mint) 20%, transparent);
+}
+.day-cell.free-day:hover { background: color-mix(in srgb, var(--mint) 14%, var(--panel-raised)); }
+.day-cell.today.free-day { background: color-mix(in srgb, var(--mint) 13%, var(--panel)); }
+.mini-event { border-left: 2px solid var(--owner-color); color: var(--owner-color); background: color-mix(in srgb, var(--owner-color) 10%, var(--panel-raised)); }
+.mini-event.mine { --owner-color: var(--mint); color: var(--mint); background: color-mix(in srgb, var(--mint) 9%, var(--panel-raised)); }
+.mini-event.partner { --owner-color: var(--rose); color: var(--rose); background: color-mix(in srgb, var(--rose) 10%, var(--panel-raised)); }
+.mini-event.busy-event { color: var(--owner-color); background: var(--panel-soft); }
+.mini-event.private-event { color: var(--owner-color); background: color-mix(in srgb, var(--owner-color) 8%, var(--panel-raised)); }
+
+@media (max-width: 600px) {
+  .day-cell { min-height: 88px; }
+  .day-event-list { gap: 3px; margin-top: 3px; }
+  .mini-event {
+    display: -webkit-box;
+    padding: 2px 3px;
+    overflow: hidden;
+    font-size: 8px;
+    line-height: 1.2;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .mini-event i { display: none; }
+  .more-events { display: block; color: var(--muted); font-size: 7px; }
+}
+@media (max-width: 370px) {
+  .day-cell { min-height: 80px; }
+  .mini-event { font-size: 7px; }
+}

@@ -38,6 +38,7 @@ const colorOptions = ['#a6e3b0', '#f3a6b7', '#a6c8ff', '#e8bd7a', '#c7a6ff', '#f
 const reminderOptions = [5, 15, 30, 60, 180, 1440, 10080];
 const maxBrowserTimeout = 2_147_000_000;
 const reminderLabel = (minutes: number) => minutes < 60 ? `${minutes} мин.` : minutes < 1440 ? `${minutes / 60} ч.` : `${minutes / 1440} дн.`;
+const telegramRedirectUri = () => new URL(import.meta.env.BASE_URL || './', window.location.href).href;
 
 async function callTelegramFunction<T>(body: Record<string, unknown>): Promise<T> {
   if (!supabase) throw new Error('Сначала подключите Supabase.');
@@ -156,7 +157,7 @@ function AuthScreen({ invitePending }: { invitePending: boolean }) {
     try {
       // Open the popup immediately from the click handler. Preparing it after an
       // await can make mobile browsers block the Telegram window.
-      const idToken = await openTelegramLogin(webTelegramClientId, challenge.nonce);
+      const idToken = await openTelegramLogin(webTelegramClientId, challenge.nonce, telegramRedirectUri());
       const result = await callTelegramFunction<{ access_token: string; refresh_token: string }>({
         action: 'web_login', idToken, nonce: challenge.nonce, challengeToken: challenge.challengeToken,
       });
@@ -239,7 +240,7 @@ function TelegramLinkCard({ user, onNotice }: { user: User; onNotice: (text: str
     setWebChallenge(null);
     setBusy(true);
     try {
-      const idToken = await openTelegramLogin(webClientId, challenge.nonce);
+      const idToken = await openTelegramLogin(webClientId, challenge.nonce, telegramRedirectUri());
       await callTelegramFunction<{ linked: boolean }>({ action: 'web_link', idToken, nonce: challenge.nonce, challengeToken: challenge.challengeToken });
       setState('linked');
       onNotice('Telegram привязан к этому аккаунту. Теперь через него можно входить на сайт и в Mini App.');
@@ -636,9 +637,13 @@ function CalendarView({ events, userId, hasPartner, date, setDate, busy, onCreat
         <div className="weekday-row">{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((day) => <span key={day}>{day}</span>)}</div>
         {days.map((day) => {
           const dayEvents = byDay(day); const inCurrentMonth = view === 'week' || day.getMonth() === current.getMonth(); const today = sameDay(day, new Date()); const free = busyDay(day) && hasPartner;
-          return <button key={day.toISOString()} className={`day-cell ${inCurrentMonth ? '' : 'outside'} ${today ? 'today' : ''} ${free ? 'free-day' : ''}`} onClick={() => onCreate(dateInput(day))}>
-            <span className="day-number">{day.getDate()}{free && <span className="free-dot" title="Нет событий" />}</span>
-            <span className="day-event-list">{dayEvents.slice(0, view === 'week' ? 5 : 3).map((event) => <span key={`${event.id}-${event.starts_at}`} role="button" tabIndex={0} className={`mini-event ${event.owner_id === userId ? 'mine' : 'partner'} ${event.visibility === 'busy' && event.owner_id !== userId ? 'busy-event' : ''} ${event.visibility === 'private' ? 'private-event' : ''}`} onClick={(e) => { e.stopPropagation(); onOpen(event); }} onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onOpen(event); } }} style={{ '--event-color': event.details?.color ?? '#84909b' } as React.CSSProperties}><i />{event.details ? event.details.title : event.visibility === 'busy' ? 'Занято' : 'Сюрприз'}</span>)}{dayEvents.length > (view === 'week' ? 5 : 3) && <small className="more-events">ещё {dayEvents.length - (view === 'week' ? 5 : 3)}</small>}</span>
+          return <button key={day.toISOString()} className={`day-cell ${inCurrentMonth ? '' : 'outside'} ${today ? 'today' : ''} ${free && inCurrentMonth ? 'free-day' : ''}`} onClick={() => onCreate(dateInput(day))}>
+            <span className="day-number">{day.getDate()}</span>
+            <span className="day-event-list">{dayEvents.slice(0, view === 'week' ? 5 : 3).map((event) => {
+              const ownerClass = event.owner_id === userId ? 'mine' : 'partner';
+              const title = event.details ? event.details.title : event.visibility === 'busy' ? 'Занято' : 'Сюрприз';
+              return <span key={`${event.id}-${event.starts_at}`} role="button" tabIndex={0} title={`${title} · ${event.owner_id === userId ? 'Вы' : event.ownerName}`} className={`mini-event ${ownerClass} ${event.visibility === 'busy' && event.owner_id !== userId ? 'busy-event' : ''} ${event.visibility === 'private' ? 'private-event' : ''}`} onClick={(e) => { e.stopPropagation(); onOpen(event); }} onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onOpen(event); } }} style={{ '--event-color': event.details?.color ?? '#84909b' } as React.CSSProperties}><i />{title}</span>;
+            })}{dayEvents.length > (view === 'week' ? 5 : 3) && <small className="more-events">ещё {dayEvents.length - (view === 'week' ? 5 : 3)}</small>}</span>
           </button>;
         })}
       </div> : <div className="event-list">{visibleEvents.length ? visibleEvents.map((event) => <EventListCard key={`${event.id}-${event.starts_at}`} event={event} userId={userId} onClick={() => onOpen(event)} />) : <EmptyState icon={<CalendarDays size={21} />} title="Пока тихо" text="Здесь появятся ваши события. Можно начать с небольшого плана на двоих." action={<button className="button button-primary" onClick={() => onCreate(todayInput())}><Plus size={16} /> Добавить событие</button>} />}</div>}
