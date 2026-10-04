@@ -4,7 +4,7 @@ import type * as React from 'react';
 import {
   AlarmClock, ArrowDownToLine, ArrowRight, Bell, CalendarDays, Check, CheckCircle2,
   ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Cloud, CloudOff, Compass, Download,
-  Heart, Lightbulb, Link2, LoaderCircle, LogOut, MapPin, Menu, Moon, Pencil, Plus,
+  Heart, Lightbulb, Link2, LoaderCircle, LogOut, MapPin, Menu, Moon, Palette, Pencil, Plus,
   Send, Settings2, Shield, Sparkles, Sun, Tag, Trash2, Upload, Users, Vote, X,
 } from 'lucide-react';
 import type { Session, User } from '@supabase/supabase-js';
@@ -18,6 +18,9 @@ import { exportCalendar, parseCalendar, type ImportedEvent } from './lib/ics';
 import { getTelegramInitData, loadTelegramLoginSdk, openTelegramLogin } from './lib/telegram';
 
 type Tab = 'calendar' | 'polls' | 'ideas' | 'settings';
+type ThemeMode = 'dark' | 'light' | 'system';
+type PaletteId = 'mint' | 'ocean' | 'rose' | 'lavender' | 'amber' | 'berry';
+type AppearancePreferences = { theme_mode: ThemeMode; palette: PaletteId };
 type Profile = { id: string; display_name: string; avatar_path: string | null };
 type CoupleInfo = { id: string; name: string };
 type Poll = { id: string; couple_id: string; created_by: string; question: string; description: string; tags: string[]; created_at: string };
@@ -33,6 +36,14 @@ const tabs: { id: Tab; label: string; icon: typeof CalendarDays }[] = [
   { id: 'polls', label: 'Опросы', icon: Vote },
   { id: 'ideas', label: 'Идеи', icon: Lightbulb },
   { id: 'settings', label: 'Ещё', icon: Menu },
+];
+const palettes: { id: PaletteId; label: string; swatches: [string, string, string] }[] = [
+  { id: 'mint', label: 'Мята', swatches: ['#a6e3b0', '#f3a6b7', '#c7a6ff'] },
+  { id: 'ocean', label: 'Океан', swatches: ['#82c8f0', '#ffc58a', '#a6ddcb'] },
+  { id: 'rose', label: 'Роза', swatches: ['#f3a6b7', '#94d8c5', '#c7a6ff'] },
+  { id: 'lavender', label: 'Лаванда', swatches: ['#c7a6ff', '#f2bd7a', '#94d8c5'] },
+  { id: 'amber', label: 'Янтарь', swatches: ['#e9bd7a', '#9dbbff', '#a6e3b0'] },
+  { id: 'berry', label: 'Ягоды', swatches: ['#ed91c0', '#86c9ef', '#e9bd7a'] },
 ];
 const colorOptions = ['#a6e3b0', '#f3a6b7', '#a6c8ff', '#e8bd7a', '#c7a6ff', '#f0d876'];
 const reminderOptions = [5, 15, 30, 60, 180, 1440, 10080];
@@ -58,18 +69,38 @@ function accountName(user: User, profile?: Profile) {
   return profile?.display_name?.trim() || (user.app_metadata?.telegram_login ? 'Пользователь Telegram' : user.email?.split('@')[0]) || 'Вы';
 }
 
-function useTheme() {
-  const [theme, setTheme] = useState(() => localStorage.getItem('vmeste-theme') ?? 'dark');
+function useTheme(userId?: string) {
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    const saved = localStorage.getItem('vmeste-theme');
+    return saved === 'light' || saved === 'system' ? saved : 'dark';
+  });
+  const [palette, setPalette] = useState<PaletteId>('mint');
+  useEffect(() => {
+    const savedTheme = userId ? localStorage.getItem(`vmeste-theme:${userId}`) : null;
+    const savedPalette = userId ? localStorage.getItem(`vmeste-palette:${userId}`) : null;
+    if (savedTheme === 'dark' || savedTheme === 'light' || savedTheme === 'system') setTheme(savedTheme);
+    else if (!userId) setTheme('dark');
+    if (palettes.some((item) => item.id === savedPalette)) setPalette(savedPalette as PaletteId);
+    else setPalette('mint');
+  }, [userId]);
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const apply = () => {
-      document.documentElement.dataset.theme = theme === 'system' ? (media.matches ? 'light' : 'dark') : theme;
+      const resolvedTheme = theme === 'system' ? (media.matches ? 'light' : 'dark') : theme;
+      document.documentElement.dataset.theme = resolvedTheme;
+      document.documentElement.dataset.palette = palette;
       document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'system' ? (media.matches ? '#f6f7f5' : '#111111') : theme === 'light' ? '#f6f7f5' : '#111111');
     };
     apply(); media.addEventListener('change', apply); return () => media.removeEventListener('change', apply);
-  }, [theme]);
-  const change = (value: string) => { localStorage.setItem('vmeste-theme', value); setTheme(value); };
-  return { theme, change };
+  }, [theme, palette]);
+  const change = useCallback((nextTheme: ThemeMode, nextPalette: PaletteId) => {
+    setTheme(nextTheme); setPalette(nextPalette);
+    if (userId) {
+      localStorage.setItem(`vmeste-theme:${userId}`, nextTheme);
+      localStorage.setItem(`vmeste-palette:${userId}`, nextPalette);
+    }
+  }, [userId]);
+  return { theme, palette, change };
 }
 
 function Avatar({ name, url, size = 'normal' }: { name: string; url?: string | null; size?: 'small' | 'normal' | 'large' }) {
@@ -307,7 +338,6 @@ function PairSetup({ user, pendingInvite, onRefresh, onNotice }: { user: User; p
 }
 
 function App() {
-  const { theme, change: changeTheme } = useTheme();
   const [session, setSession] = useState<Session | null>(null); const [authReady, setAuthReady] = useState(false); const [recoveryMode, setRecoveryMode] = useState(false);
   const [tab, setTab] = useState<Tab>('calendar'); const [loading, setLoading] = useState(false); const [refreshKey, setRefreshKey] = useState(0); const [reminderClock, setReminderClock] = useState(0); const [devicePushActive, setDevicePushActive] = useState(false);
   const [couple, setCouple] = useState<CoupleInfo | null>(null); const [profiles, setProfiles] = useState<Profile[]>([]); const [avatars, setAvatars] = useState<Record<string, string>>({});
@@ -315,7 +345,9 @@ function App() {
   const [ideas, setIdeas] = useState<DateIdea[]>([]); const [importantDates, setImportantDates] = useState<ImportantDate[]>([]); const [tags, setTags] = useState<TagRow[]>([]);
   const [notice, setNotice] = useState<{ text: string; kind: 'success' | 'error' | 'info' } | null>(null); const [connection, setConnection] = useState<'connecting' | 'online' | 'offline'>('connecting'); const [pwaUpdate, setPwaUpdate] = useState(false);
   const [activeEvent, setActiveEvent] = useState<CalendarEvent | null | false>(false); const [eventDate, setEventDate] = useState(todayInput()); const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null); const [importDialog, setImportDialog] = useState<ImportedEvent[] | null>(null);
-  const user = session?.user ?? null; const pendingInvite = useMemo(() => new URLSearchParams(location.search).get('invite') ?? '', []);
+  const user = session?.user ?? null;
+  const { theme, palette, change: changeAppearance } = useTheme(user?.id);
+  const pendingInvite = useMemo(() => new URLSearchParams(location.search).get('invite') ?? '', []);
   const myProfile = profiles.find((profile) => profile.id === user?.id);
   const partner = profiles.find((profile) => profile.id !== user?.id);
   const showNotice = useCallback((text: string, kind: 'success' | 'error' | 'info' = 'success') => {
@@ -385,6 +417,33 @@ function App() {
 
   useEffect(() => { if (user) void refreshAll(); }, [user, refreshKey, refreshAll]);
   const refresh = () => setRefreshKey((key) => key + 1);
+
+  useEffect(() => {
+    if (!supabase || !user) return;
+    let active = true;
+    const load = async () => {
+      const { data, error } = await supabase!.from('user_preferences').select('theme_mode,palette').eq('user_id', user.id).maybeSingle();
+      if (!active) return;
+      if (error) {
+        if (error.code === 'PGRST205' || error.code === '42P01') showNotice('Для сохранения персонального оформления примените новую миграцию Supabase. Инструкция: docs/НАСТРОЙКА.md.', 'info');
+        else showNotice(`Не удалось загрузить оформление: ${errorMessage(error)}`, 'error');
+        return;
+      }
+      if (data && ['dark', 'light', 'system'].includes(data.theme_mode) && palettes.some((item) => item.id === data.palette)) {
+        changeAppearance(data.theme_mode as ThemeMode, data.palette as PaletteId);
+      }
+    };
+    void load();
+    const channel = supabase.channel(`preferences-${user.id}`).on('postgres_changes', {
+      event: '*', schema: 'public', table: 'user_preferences', filter: `user_id=eq.${user.id}`,
+    }, (payload) => {
+      const next = payload.new as Partial<AppearancePreferences>;
+      if (next.theme_mode && ['dark', 'light', 'system'].includes(next.theme_mode) && next.palette && palettes.some((item) => item.id === next.palette)) {
+        changeAppearance(next.theme_mode, next.palette);
+      }
+    }).subscribe();
+    return () => { active = false; void supabase!.removeChannel(channel); };
+  }, [user?.id, changeAppearance, showNotice]);
 
   useEffect(() => {
     if (!supabase || !couple) return;
@@ -580,6 +639,15 @@ function App() {
   async function updateProfile(name: string) {
     if (!supabase || !user) return; const { error } = await supabase.from('profiles').update({ display_name: name }).eq('id', user.id); if (error) throw error; showNotice('Имя сохранено.'); await refreshAll();
   }
+  async function updateAppearance(themeMode: ThemeMode, colorPalette: PaletteId) {
+    if (!supabase || !user) throw new Error('Сначала войдите в аккаунт.');
+    const { error } = await supabase.from('user_preferences').upsert({
+      user_id: user.id, theme_mode: themeMode, palette: colorPalette, updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
+    if (error) throw error;
+    changeAppearance(themeMode, colorPalette);
+    showNotice('Оформление сохранено для вашего аккаунта.');
+  }
   async function uploadAvatar(file: File | null) {
     if (!supabase || !user) return;
     if (!file) {
@@ -607,7 +675,7 @@ function App() {
       {tab === 'calendar' && <CalendarView events={events} userId={user.id} hasPartner={Boolean(partner)} date={eventDate} setDate={setEventDate} busy={loading} onCreate={(date) => { setEventDate(date); setActiveEvent(null); }} onOpen={(event) => setActiveEvent(event)} onExport={() => { setExportRequested(true); setTab('settings'); }} />}
       {tab === 'polls' && <PollsView polls={polls} options={pollOptions} votes={votes} userId={user.id} tags={tags} onCreate={createPoll} onVote={vote} onError={(text) => showNotice(text, 'error')} />}
       {tab === 'ideas' && <IdeasView ideas={ideas} onSave={saveIdea} onStatus={changeIdeaStatus} onDelete={removeIdea} onError={(text) => showNotice(text, 'error')} />}
-      {tab === 'settings' && <SettingsView user={user} profile={myProfile} partner={partner} avatars={avatars} couple={couple} theme={theme} onTheme={changeTheme} onProfile={updateProfile} onAvatar={uploadAvatar} vapidPublicKey={import.meta.env.VITE_VAPID_PUBLIC_KEY ?? ''} openExport={exportRequested} onExportOpened={() => setExportRequested(false)} onInvite={async () => {
+      {tab === 'settings' && <SettingsView user={user} profile={myProfile} partner={partner} avatars={avatars} couple={couple} theme={theme} palette={palette} onAppearance={updateAppearance} onProfile={updateProfile} onAvatar={uploadAvatar} vapidPublicKey={import.meta.env.VITE_VAPID_PUBLIC_KEY ?? ''} openExport={exportRequested} onExportOpened={() => setExportRequested(false)} onInvite={async () => {
         if (!supabase) return ''; const { data: member } = await supabase.from('couple_members').select('couple_id').eq('user_id', user.id).single(); const { data, error } = await supabase.rpc('create_invitation', { p_couple_id: member?.couple_id }); if (error) throw error; return `${location.origin}${import.meta.env.BASE_URL}?invite=${data}`;
       }} onSignOut={signOut} onAddTag={addTag} onDeleteTag={removeTag} tags={tags} importantDates={importantDates} onAddDate={addImportantDate} onDeleteDate={deleteImportantDate} onImport={importFile} onExport={exportCurrent} events={events} installPrompt={Boolean(installPrompt)} onInstall={install} onNotice={showNotice} />}
     </main>
@@ -772,16 +840,16 @@ function IdeaDialog({ idea, close, onSave, busy }: { idea: DateIdea | null; clos
   return <Dialog title={idea ? 'Изменить идею' : 'Новая идея'} close={close}><form className="stack-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...(idea ?? {}), title: title.trim(), description: description.trim(), tags: tagText.split(',').map((tag) => tag.trim()).filter(Boolean) }); }}><Field label="Название"><input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} maxLength={160} placeholder="Например, пикник на закате" required /></Field><Field label="Описание"><textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2500} placeholder="Что понадобится или почему хочется попробовать?" /></Field><Field label="Теги"><input value={tagText} onChange={(e) => setTagText(e.target.value)} placeholder="Природа, недорого, рядом" /></Field><div className="dialog-actions"><button className="button button-secondary" type="button" onClick={close}>Отмена</button><button className="button button-primary" disabled={busy || !title.trim()}>{busy && <LoaderCircle size={16} className="spin" />}{idea ? 'Сохранить' : 'Добавить идею'}</button></div></form></Dialog>;
 }
 
-function SettingsView({ user, profile, partner, avatars, couple, theme, onTheme, onProfile, onAvatar, onInvite, onSignOut, tags, onAddTag, onDeleteTag, importantDates, onAddDate, onDeleteDate, onImport, onExport, events, installPrompt, onInstall, onNotice, vapidPublicKey, openExport, onExportOpened }: {
-  user: User; profile?: Profile; partner?: Profile; avatars: Record<string, string>; couple: CoupleInfo; theme: string;
-  onTheme: (value: string) => void; onProfile: (name: string) => Promise<void>; onAvatar: (file: File | null) => Promise<void>; openExport: boolean; onExportOpened: () => void;
+function SettingsView({ user, profile, partner, avatars, couple, theme, palette, onAppearance, onProfile, onAvatar, onInvite, onSignOut, tags, onAddTag, onDeleteTag, importantDates, onAddDate, onDeleteDate, onImport, onExport, events, installPrompt, onInstall, onNotice, vapidPublicKey, openExport, onExportOpened }: {
+  user: User; profile?: Profile; partner?: Profile; avatars: Record<string, string>; couple: CoupleInfo; theme: ThemeMode; palette: PaletteId;
+  onAppearance: (theme: ThemeMode, palette: PaletteId) => Promise<void>; onProfile: (name: string) => Promise<void>; onAvatar: (file: File | null) => Promise<void>; openExport: boolean; onExportOpened: () => void;
   onInvite: () => Promise<string>; onSignOut: () => Promise<void>; tags: TagRow[]; onAddTag: (label: string, color: string) => Promise<void>; onDeleteTag: (tag: TagRow) => Promise<void>;
   importantDates: ImportantDate[]; onAddDate: (title: string, date: string, repeats: boolean, reminderDays: number) => Promise<void>; onDeleteDate: (item: ImportantDate) => Promise<void>;
   onImport: (file: File) => Promise<void>; onExport: (from: Date, to: Date, allowed: Visibility[]) => void; events: CalendarEvent[]; installPrompt: boolean; onInstall: () => void; onNotice: (text: string, kind?: 'success' | 'error' | 'info') => void; vapidPublicKey: string;
 }) {
   const [displayName, setDisplayName] = useState(profile?.display_name ?? ''); const [profileBusy, setProfileBusy] = useState(false); const [link, setLink] = useState(''); const [inviteBusy, setInviteBusy] = useState(false);
   const [tagName, setTagName] = useState(''); const [tagColor, setTagColor] = useState('#a6e3b0'); const [tagBusy, setTagBusy] = useState(false);
-  const [dateDialog, setDateDialog] = useState(false); const [exportDialog, setExportDialog] = useState(false); const [reminderPermission, setReminderPermission] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+  const [dateDialog, setDateDialog] = useState(false); const [exportDialog, setExportDialog] = useState(false); const [appearanceBusy, setAppearanceBusy] = useState(false); const [reminderPermission, setReminderPermission] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   const [pushState, setPushState] = useState<'checking' | 'enabled' | 'disabled' | 'not-saved' | 'unsupported'>('checking'); const [pushBusy, setPushBusy] = useState(false);
   useEffect(() => setDisplayName(profile?.display_name ?? ''), [profile?.display_name]);
   useEffect(() => { if (openExport) { setExportDialog(true); onExportOpened(); } }, [openExport, onExportOpened]);
@@ -802,6 +870,13 @@ function SettingsView({ user, profile, partner, avatars, couple, theme, onTheme,
     void check(); return () => { live = false; };
   }, [user.id]);
   async function saveName(event: FormEvent) { event.preventDefault(); setProfileBusy(true); try { await onProfile(displayName.trim()); } catch (cause) { onNotice(errorMessage(cause), 'error'); } finally { setProfileBusy(false); } }
+  async function saveAppearance(nextTheme: ThemeMode, nextPalette: PaletteId) {
+    if (appearanceBusy) return;
+    setAppearanceBusy(true);
+    try { await onAppearance(nextTheme, nextPalette); }
+    catch (cause) { onNotice(`Не удалось сохранить оформление: ${errorMessage(cause)}`, 'error'); }
+    finally { setAppearanceBusy(false); }
+  }
   async function invite() { setInviteBusy(true); try { const value = await onInvite(); setLink(value); } catch (cause) { onNotice(errorMessage(cause), 'error'); } finally { setInviteBusy(false); } }
   async function saveTag(event: FormEvent) { event.preventDefault(); setTagBusy(true); try { await onAddTag(tagName.trim(), tagColor); setTagName(''); onNotice('Тег добавлен.'); } catch (cause) { onNotice(errorMessage(cause), 'error'); } finally { setTagBusy(false); } }
   async function chooseAvatar(event: React.ChangeEvent<HTMLInputElement>) { try { await onAvatar(event.target.files?.[0] ?? null); } catch (cause) { onNotice(errorMessage(cause), 'error'); } finally { event.target.value = ''; } }
@@ -866,7 +941,10 @@ function SettingsView({ user, profile, partner, avatars, couple, theme, onTheme,
         {!partner && <><button className="button button-primary" disabled={inviteBusy} onClick={() => void invite()}>{inviteBusy ? <LoaderCircle size={16} className="spin" /> : <Link2 size={16} />} Создать одноразовую ссылку</button><p className="settings-hint"><Shield size={14} /> Ссылка случайная, действует 7 дней и принимается один раз.</p>{link && <div className="invite-result"><label>Отправьте партнёру</label><div className="copy-row"><input readOnly value={link} /><button className="button button-secondary" onClick={async () => { try { await navigator.clipboard.writeText(link); onNotice('Ссылка скопирована.'); } catch { onNotice('Скопируйте ссылку вручную.', 'info'); } }}>Копировать</button></div></div>}</>}
       </section>
 
-      <section className="settings-card panel"><div className="settings-card-heading"><span className="small-icon lavender"><Sun size={16} /></span><div><h3>Оформление</h3><p>Выберите, как выглядит приложение.</p></div></div><div className="theme-options">{[{ id: 'dark', label: 'Тёмная', icon: Moon }, { id: 'light', label: 'Светлая', icon: Sun }, { id: 'system', label: 'Системная', icon: Settings2 }].map(({ id, label, icon: Icon }) => <button key={id} className={`theme-option ${theme === id ? 'active' : ''}`} onClick={() => onTheme(id)}><Icon size={17} /><span>{label}</span>{theme === id && <Check size={15} />}</button>)}</div></section>
+      <section className="settings-card panel appearance-settings"><div className="settings-card-heading"><span className="small-icon lavender"><Palette size={16} /></span><div><h3>Оформление</h3><p>Настраивается отдельно для вашего аккаунта и синхронизируется между вашими устройствами.</p></div></div>
+        <div className="appearance-group"><b>Режим</b><div className="theme-options">{[{ id: 'dark' as const, label: 'Тёмная', icon: Moon }, { id: 'light' as const, label: 'Светлая', icon: Sun }, { id: 'system' as const, label: 'Системная', icon: Settings2 }].map(({ id, label, icon: Icon }) => <button key={id} disabled={appearanceBusy} className={`theme-option ${theme === id ? 'active' : ''}`} onClick={() => void saveAppearance(id, palette)}><Icon size={17} /><span>{label}</span>{theme === id && <Check size={15} />}</button>)}</div></div>
+        <div className="appearance-group"><div className="appearance-group-title"><b>Цветовая палитра</b>{appearanceBusy && <LoaderCircle size={14} className="spin" aria-label="Сохраняем оформление" />}</div><div className="palette-options">{palettes.map((item) => <button type="button" key={item.id} disabled={appearanceBusy} aria-pressed={palette === item.id} className={`palette-option ${palette === item.id ? 'active' : ''}`} onClick={() => void saveAppearance(theme, item.id)}><span className="palette-swatches">{item.swatches.map((color) => <i key={color} style={{ backgroundColor: color }} />)}</span><span>{item.label}</span>{palette === item.id && <Check size={13} />}</button>)}</div></div>
+      </section>
 
       <section className="settings-card panel"><div className="settings-card-heading"><span className="small-icon amber"><Bell size={16} /></span><div><h3>Напоминания</h3><p>Push может приходить, когда приложение закрыто, после настройки Supabase.</p></div></div><div className="permission-row"><span className={`permission-indicator ${reminderPermission === 'granted' ? 'allowed' : ''}`} />Разрешение браузера: {reminderPermission === 'granted' ? 'получено' : reminderPermission === 'denied' ? 'запрещено в настройках сайта' : reminderPermission === 'unsupported' ? 'не поддерживается' : 'не запрашивалось'}</div><div className="permission-row"><span className={`permission-indicator ${pushState === 'enabled' ? 'allowed' : ''}`} />Подписка на этом устройстве: {pushState === 'checking' ? 'проверяем…' : pushState === 'enabled' ? 'включена' : pushState === 'not-saved' ? 'не сохранена в Supabase' : pushState === 'unsupported' ? 'не поддерживается этим браузером' : 'выключена'}</div>{pushState === 'enabled' ? <button className="button button-secondary" disabled={pushBusy} onClick={() => void disablePush()}>{pushBusy ? <LoaderCircle size={15} className="spin" /> : <Bell size={15} />} Выключить push на этом устройстве</button> : <button className="button button-primary" disabled={pushBusy || pushState === 'checking' || pushState === 'unsupported'} onClick={() => void enablePush()}>{pushBusy ? <LoaderCircle size={15} className="spin" /> : <Bell size={15} />} Включить push на этом устройстве</button>}{!vapidPublicKey && <p className="settings-hint">Сборка сайта пока не получила публичный VAPID-ключ. Администратору нужно выполнить шаги из раздела «Push-уведомления» в инструкции.</p>}<p className="settings-hint">Каждый участник включает push на своём телефоне отдельно. Уведомления требуют интернета, разрешения браузера и настроенного Supabase; система может задержать доставку. Простые уведомления только в открытой вкладке продолжают работать без push-подписки.</p></section>
 

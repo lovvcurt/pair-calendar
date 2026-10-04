@@ -384,3 +384,32 @@ input[type=checkbox], input[type=radio] { width: 15px; height: 15px; accent-colo
   .day-cell { min-height: 80px; }
   .mini-event { font-size: 7px; }
 }
+
+.appearance-settings { display: grid; gap: 17px; }
+.appearance-settings .settings-card-heading { margin-bottom: 0; }
+.appearance-group { display: grid; gap: 8px; }
+.appearance-group > b, .appearance-group-title { color: var(--text-secondary); font-size: 10px; }
+.appearance-group-title { display: flex; align-items: center; justify-content: space-between; }
+.palette-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.palette-option { position: relative; display: grid; justify-items: center; align-content: center; gap: 7px; min-width: 0; min-height: 64px; padding: 8px 5px; border: 1px solid var(--border); border-radius: 12px; color: var(--text-secondary); background: var(--panel-raised); font-size: 9px; cursor: pointer; }
+.palette-option.active { border-color: color-mix(in srgb, var(--mint) 68%, var(--border)); color: var(--mint); background: color-mix(in srgb, var(--mint) 7%, var(--panel-raised)); }
+.palette-swatches { display: flex; align-items: center; justify-content: center; padding-left: 5px; }
+.palette-swatches i { width: 14px; height: 14px; margin-left: -5px; border: 2px solid var(--panel-raised); border-radius: 50%; }
+.palette-option.active .palette-swatches i { border-color: var(--panel); }
+.palette-option > svg { position: absolute; top: 5px; right: 5px; }
+
+:root[data-palette='ocean'] { --mint: #82c8f0; --mint-strong: #62b7e7; --mint-ink: #10202a; --rose: #ffc58a; --lavender: #a6ddcb; --amber: #f0d876; }
+:root[data-theme='light'][data-palette='ocean'] { --mint: #277dad; --mint-strong: #1b688f; --mint-ink: #fff; --rose: #a75c14; --lavender: #27795e; --amber: #946514; }
+:root[data-palette='rose'] { --mint: #f3a6b7; --mint-strong: #e9829c; --mint-ink: #29151b; --rose: #94d8c5; --lavender: #c7a6ff; --amber: #e9bd7a; }
+:root[data-theme='light'][data-palette='rose'] { --mint: #b84d68; --mint-strong: #9f3852; --mint-ink: #fff; --rose: #297a68; --lavender: #7250ac; --amber: #946014; }
+:root[data-palette='lavender'] { --mint: #c7a6ff; --mint-strong: #ae83f4; --mint-ink: #21162f; --rose: #f2bd7a; --lavender: #94d8c5; --amber: #f3a6b7; }
+:root[data-theme='light'][data-palette='lavender'] { --mint: #7250ac; --mint-strong: #5f3f97; --mint-ink: #fff; --rose: #9a5c16; --lavender: #297a68; --amber: #b84d68; }
+:root[data-palette='amber'] { --mint: #e9bd7a; --mint-strong: #dba64f; --mint-ink: #281e10; --rose: #9dbbff; --lavender: #f3a6b7; --amber: #a6e3b0; }
+:root[data-theme='light'][data-palette='amber'] { --mint: #946414; --mint-strong: #78500c; --mint-ink: #fff; --rose: #3e66a2; --lavender: #b84d68; --amber: #327a47; }
+:root[data-palette='berry'] { --mint: #ed91c0; --mint-strong: #dd6fa9; --mint-ink: #28121f; --rose: #86c9ef; --lavender: #c7a6ff; --amber: #e9bd7a; }
+:root[data-theme='light'][data-palette='berry'] { --mint: #a94177; --mint-strong: #913564; --mint-ink: #fff; --rose: #276b91; --lavender: #7250ac; --amber: #946014; }
+
+@media (max-width: 600px) {
+  .appearance-settings { gap: 15px; }
+  .palette-options { gap: 6px; }
+}
