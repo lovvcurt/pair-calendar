@@ -20,7 +20,7 @@ import { getTelegramInitData, loadTelegramLoginSdk, openTelegramLogin } from './
 type Tab = 'calendar' | 'polls' | 'ideas' | 'settings';
 type ThemeMode = 'dark' | 'light' | 'system';
 type PaletteId = 'mint' | 'ocean' | 'rose' | 'lavender' | 'amber' | 'berry';
-type AppearancePreferences = { theme_mode: ThemeMode; palette: PaletteId };
+type AppearancePreferences = { theme_mode: ThemeMode; palette: PaletteId; my_event_color: string | null; partner_event_color: string | null };
 type Profile = { id: string; display_name: string; avatar_path: string | null };
 type CoupleInfo = { id: string; name: string };
 type Poll = { id: string; couple_id: string; created_by: string; question: string; description: string; tags: string[]; created_at: string };
@@ -37,13 +37,13 @@ const tabs: { id: Tab; label: string; icon: typeof CalendarDays }[] = [
   { id: 'ideas', label: 'Идеи', icon: Lightbulb },
   { id: 'settings', label: 'Ещё', icon: Menu },
 ];
-const palettes: { id: PaletteId; label: string; swatches: [string, string, string] }[] = [
-  { id: 'mint', label: 'Мята', swatches: ['#a6e3b0', '#f3a6b7', '#c7a6ff'] },
-  { id: 'ocean', label: 'Океан', swatches: ['#82c8f0', '#ffc58a', '#a6ddcb'] },
-  { id: 'rose', label: 'Роза', swatches: ['#f3a6b7', '#94d8c5', '#c7a6ff'] },
-  { id: 'lavender', label: 'Лаванда', swatches: ['#c7a6ff', '#f2bd7a', '#94d8c5'] },
-  { id: 'amber', label: 'Янтарь', swatches: ['#e9bd7a', '#9dbbff', '#a6e3b0'] },
-  { id: 'berry', label: 'Ягоды', swatches: ['#ed91c0', '#86c9ef', '#e9bd7a'] },
+const palettes: { id: PaletteId; label: string; swatches: [string, string, string]; events: { dark: [string, string]; light: [string, string] } }[] = [
+  { id: 'mint', label: 'Мята', swatches: ['#a6e3b0', '#f3a6b7', '#c7a6ff'], events: { dark: ['#a6e3b0', '#f3a6b7'], light: ['#45995c', '#d96982'] } },
+  { id: 'ocean', label: 'Океан', swatches: ['#82c8f0', '#ffc58a', '#a6ddcb'], events: { dark: ['#82c8f0', '#ffc58a'], light: ['#277dad', '#a75c14'] } },
+  { id: 'rose', label: 'Роза', swatches: ['#f3a6b7', '#94d8c5', '#c7a6ff'], events: { dark: ['#f3a6b7', '#94d8c5'], light: ['#b84d68', '#297a68'] } },
+  { id: 'lavender', label: 'Лаванда', swatches: ['#c7a6ff', '#f2bd7a', '#94d8c5'], events: { dark: ['#c7a6ff', '#f2bd7a'], light: ['#7250ac', '#9a5c16'] } },
+  { id: 'amber', label: 'Янтарь', swatches: ['#e9bd7a', '#9dbbff', '#a6e3b0'], events: { dark: ['#e9bd7a', '#9dbbff'], light: ['#946414', '#3e66a2'] } },
+  { id: 'berry', label: 'Ягоды', swatches: ['#ed91c0', '#86c9ef', '#e9bd7a'], events: { dark: ['#ed91c0', '#86c9ef'], light: ['#a94177', '#276b91'] } },
 ];
 const colorOptions = ['#a6e3b0', '#f3a6b7', '#a6c8ff', '#e8bd7a', '#c7a6ff', '#f0d876'];
 const reminderOptions = [5, 15, 30, 60, 180, 1440, 10080];
@@ -69,38 +69,60 @@ function accountName(user: User, profile?: Profile) {
   return profile?.display_name?.trim() || (user.app_metadata?.telegram_login ? 'Пользователь Telegram' : user.email?.split('@')[0]) || 'Вы';
 }
 
+function defaultCalendarColors(theme: ThemeMode, palette: PaletteId): [string, string] {
+  const resolvedTheme = theme === 'system' ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme;
+  return palettes.find((item) => item.id === palette)?.events[resolvedTheme] ?? palettes[0].events[resolvedTheme];
+}
+
 function useTheme(userId?: string) {
-  const [theme, setTheme] = useState<ThemeMode>(() => {
+  const [appearance, setAppearance] = useState<AppearancePreferences>(() => {
     const saved = localStorage.getItem('vmeste-theme');
-    return saved === 'light' || saved === 'system' ? saved : 'dark';
+    return { theme_mode: saved === 'light' || saved === 'system' ? saved : 'dark', palette: 'mint', my_event_color: null, partner_event_color: null };
   });
-  const [palette, setPalette] = useState<PaletteId>('mint');
+  const cacheAppearance = (value: string | null): AppearancePreferences | null => {
+    if (!value) return null;
+    try {
+      const parsed = JSON.parse(value) as Partial<AppearancePreferences>;
+      if ((parsed.theme_mode === 'dark' || parsed.theme_mode === 'light' || parsed.theme_mode === 'system') && palettes.some((item) => item.id === parsed.palette)) {
+        const validColor = (color: unknown): color is string => typeof color === 'string' && /^#[\da-f]{6}$/i.test(color);
+        return { theme_mode: parsed.theme_mode, palette: parsed.palette as PaletteId, my_event_color: validColor(parsed.my_event_color) ? parsed.my_event_color : null, partner_event_color: validColor(parsed.partner_event_color) ? parsed.partner_event_color : null };
+      }
+    } catch { /* Ignore invalid local cache and use the normal defaults. */ }
+    return null;
+  };
   useEffect(() => {
-    const savedTheme = userId ? localStorage.getItem(`vmeste-theme:${userId}`) : null;
-    const savedPalette = userId ? localStorage.getItem(`vmeste-palette:${userId}`) : null;
-    if (savedTheme === 'dark' || savedTheme === 'light' || savedTheme === 'system') setTheme(savedTheme);
-    else if (!userId) setTheme('dark');
-    if (palettes.some((item) => item.id === savedPalette)) setPalette(savedPalette as PaletteId);
-    else setPalette('mint');
+    if (!userId) { setAppearance({ theme_mode: 'dark', palette: 'mint', my_event_color: null, partner_event_color: null }); return; }
+    const cached = cacheAppearance(localStorage.getItem(`vmeste-appearance:${userId}`));
+    if (cached) { setAppearance(cached); return; }
+    const savedTheme = localStorage.getItem(`vmeste-theme:${userId}`) ?? localStorage.getItem('vmeste-theme');
+    const savedPalette = localStorage.getItem(`vmeste-palette:${userId}`);
+    setAppearance({
+      theme_mode: savedTheme === 'light' || savedTheme === 'system' ? savedTheme : 'dark',
+      palette: palettes.some((item) => item.id === savedPalette) ? savedPalette as PaletteId : 'mint',
+      my_event_color: null, partner_event_color: null,
+    });
   }, [userId]);
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const apply = () => {
-      const resolvedTheme = theme === 'system' ? (media.matches ? 'light' : 'dark') : theme;
+      const resolvedTheme = appearance.theme_mode === 'system' ? (media.matches ? 'light' : 'dark') : appearance.theme_mode;
       document.documentElement.dataset.theme = resolvedTheme;
-      document.documentElement.dataset.palette = palette;
-      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'system' ? (media.matches ? '#f6f7f5' : '#111111') : theme === 'light' ? '#f6f7f5' : '#111111');
+      document.documentElement.dataset.palette = appearance.palette;
+      if (appearance.my_event_color) document.documentElement.style.setProperty('--calendar-own-color', appearance.my_event_color);
+      else document.documentElement.style.removeProperty('--calendar-own-color');
+      if (appearance.partner_event_color) document.documentElement.style.setProperty('--calendar-partner-color', appearance.partner_event_color);
+      else document.documentElement.style.removeProperty('--calendar-partner-color');
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolvedTheme === 'light' ? '#f6f7f5' : '#111111');
     };
     apply(); media.addEventListener('change', apply); return () => media.removeEventListener('change', apply);
-  }, [theme, palette]);
-  const change = useCallback((nextTheme: ThemeMode, nextPalette: PaletteId) => {
-    setTheme(nextTheme); setPalette(nextPalette);
+  }, [appearance]);
+  const change = useCallback((next: AppearancePreferences) => {
+    setAppearance(next);
     if (userId) {
-      localStorage.setItem(`vmeste-theme:${userId}`, nextTheme);
-      localStorage.setItem(`vmeste-palette:${userId}`, nextPalette);
+      localStorage.setItem(`vmeste-appearance:${userId}`, JSON.stringify(next));
     }
   }, [userId]);
-  return { theme, palette, change };
+  return { theme: appearance.theme_mode, palette: appearance.palette, myEventColor: appearance.my_event_color, partnerEventColor: appearance.partner_event_color, change };
 }
 
 function Avatar({ name, url, size = 'normal' }: { name: string; url?: string | null; size?: 'small' | 'normal' | 'large' }) {
@@ -346,7 +368,7 @@ function App() {
   const [notice, setNotice] = useState<{ text: string; kind: 'success' | 'error' | 'info' } | null>(null); const [connection, setConnection] = useState<'connecting' | 'online' | 'offline'>('connecting'); const [pwaUpdate, setPwaUpdate] = useState(false);
   const [activeEvent, setActiveEvent] = useState<CalendarEvent | null | false>(false); const [eventDate, setEventDate] = useState(todayInput()); const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null); const [importDialog, setImportDialog] = useState<ImportedEvent[] | null>(null);
   const user = session?.user ?? null;
-  const { theme, palette, change: changeAppearance } = useTheme(user?.id);
+  const { theme, palette, myEventColor, partnerEventColor, change: changeAppearance } = useTheme(user?.id);
   const pendingInvite = useMemo(() => new URLSearchParams(location.search).get('invite') ?? '', []);
   const myProfile = profiles.find((profile) => profile.id === user?.id);
   const partner = profiles.find((profile) => profile.id !== user?.id);
@@ -422,7 +444,7 @@ function App() {
     if (!supabase || !user) return;
     let active = true;
     const load = async () => {
-      const { data, error } = await supabase!.from('user_preferences').select('theme_mode,palette').eq('user_id', user.id).maybeSingle();
+      const { data, error } = await supabase!.from('user_preferences').select('theme_mode,palette,my_event_color,partner_event_color').eq('user_id', user.id).maybeSingle();
       if (!active) return;
       if (error) {
         if (error.code === 'PGRST205' || error.code === '42P01') showNotice('Для сохранения персонального оформления примените новую миграцию Supabase. Инструкция: docs/НАСТРОЙКА.md.', 'info');
@@ -430,7 +452,8 @@ function App() {
         return;
       }
       if (data && ['dark', 'light', 'system'].includes(data.theme_mode) && palettes.some((item) => item.id === data.palette)) {
-        changeAppearance(data.theme_mode as ThemeMode, data.palette as PaletteId);
+        const color = (value: unknown) => typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value : null;
+        changeAppearance({ theme_mode: data.theme_mode as ThemeMode, palette: data.palette as PaletteId, my_event_color: color(data.my_event_color), partner_event_color: color(data.partner_event_color) });
       }
     };
     void load();
@@ -439,7 +462,8 @@ function App() {
     }, (payload) => {
       const next = payload.new as Partial<AppearancePreferences>;
       if (next.theme_mode && ['dark', 'light', 'system'].includes(next.theme_mode) && next.palette && palettes.some((item) => item.id === next.palette)) {
-        changeAppearance(next.theme_mode, next.palette);
+        const color = (value: unknown) => typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value : null;
+        changeAppearance({ theme_mode: next.theme_mode, palette: next.palette, my_event_color: color(next.my_event_color), partner_event_color: color(next.partner_event_color) });
       }
     }).subscribe();
     return () => { active = false; void supabase!.removeChannel(channel); };
@@ -639,13 +663,13 @@ function App() {
   async function updateProfile(name: string) {
     if (!supabase || !user) return; const { error } = await supabase.from('profiles').update({ display_name: name }).eq('id', user.id); if (error) throw error; showNotice('Имя сохранено.'); await refreshAll();
   }
-  async function updateAppearance(themeMode: ThemeMode, colorPalette: PaletteId) {
+  async function updateAppearance(themeMode: ThemeMode, colorPalette: PaletteId, myColor: string | null, partnerColor: string | null) {
     if (!supabase || !user) throw new Error('Сначала войдите в аккаунт.');
     const { error } = await supabase.from('user_preferences').upsert({
-      user_id: user.id, theme_mode: themeMode, palette: colorPalette, updated_at: new Date().toISOString(),
+      user_id: user.id, theme_mode: themeMode, palette: colorPalette, my_event_color: myColor, partner_event_color: partnerColor, updated_at: new Date().toISOString(),
     }, { onConflict: 'user_id' });
     if (error) throw error;
-    changeAppearance(themeMode, colorPalette);
+    changeAppearance({ theme_mode: themeMode, palette: colorPalette, my_event_color: myColor, partner_event_color: partnerColor });
     showNotice('Оформление сохранено для вашего аккаунта.');
   }
   async function uploadAvatar(file: File | null) {
@@ -675,7 +699,7 @@ function App() {
       {tab === 'calendar' && <CalendarView events={events} userId={user.id} hasPartner={Boolean(partner)} date={eventDate} setDate={setEventDate} busy={loading} onCreate={(date) => { setEventDate(date); setActiveEvent(null); }} onOpen={(event) => setActiveEvent(event)} onExport={() => { setExportRequested(true); setTab('settings'); }} />}
       {tab === 'polls' && <PollsView polls={polls} options={pollOptions} votes={votes} userId={user.id} tags={tags} onCreate={createPoll} onVote={vote} onError={(text) => showNotice(text, 'error')} />}
       {tab === 'ideas' && <IdeasView ideas={ideas} onSave={saveIdea} onStatus={changeIdeaStatus} onDelete={removeIdea} onError={(text) => showNotice(text, 'error')} />}
-      {tab === 'settings' && <SettingsView user={user} profile={myProfile} partner={partner} avatars={avatars} couple={couple} theme={theme} palette={palette} onAppearance={updateAppearance} onProfile={updateProfile} onAvatar={uploadAvatar} vapidPublicKey={import.meta.env.VITE_VAPID_PUBLIC_KEY ?? ''} openExport={exportRequested} onExportOpened={() => setExportRequested(false)} onInvite={async () => {
+      {tab === 'settings' && <SettingsView user={user} profile={myProfile} partner={partner} avatars={avatars} couple={couple} theme={theme} palette={palette} myEventColor={myEventColor} partnerEventColor={partnerEventColor} onAppearance={updateAppearance} onProfile={updateProfile} onAvatar={uploadAvatar} vapidPublicKey={import.meta.env.VITE_VAPID_PUBLIC_KEY ?? ''} openExport={exportRequested} onExportOpened={() => setExportRequested(false)} onInvite={async () => {
         if (!supabase) return ''; const { data: member } = await supabase.from('couple_members').select('couple_id').eq('user_id', user.id).single(); const { data, error } = await supabase.rpc('create_invitation', { p_couple_id: member?.couple_id }); if (error) throw error; return `${location.origin}${import.meta.env.BASE_URL}?invite=${data}`;
       }} onSignOut={signOut} onAddTag={addTag} onDeleteTag={removeTag} tags={tags} importantDates={importantDates} onAddDate={addImportantDate} onDeleteDate={deleteImportantDate} onImport={importFile} onExport={exportCurrent} events={events} installPrompt={Boolean(installPrompt)} onInstall={install} onNotice={showNotice} />}
     </main>
@@ -840,9 +864,9 @@ function IdeaDialog({ idea, close, onSave, busy }: { idea: DateIdea | null; clos
   return <Dialog title={idea ? 'Изменить идею' : 'Новая идея'} close={close}><form className="stack-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...(idea ?? {}), title: title.trim(), description: description.trim(), tags: tagText.split(',').map((tag) => tag.trim()).filter(Boolean) }); }}><Field label="Название"><input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} maxLength={160} placeholder="Например, пикник на закате" required /></Field><Field label="Описание"><textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2500} placeholder="Что понадобится или почему хочется попробовать?" /></Field><Field label="Теги"><input value={tagText} onChange={(e) => setTagText(e.target.value)} placeholder="Природа, недорого, рядом" /></Field><div className="dialog-actions"><button className="button button-secondary" type="button" onClick={close}>Отмена</button><button className="button button-primary" disabled={busy || !title.trim()}>{busy && <LoaderCircle size={16} className="spin" />}{idea ? 'Сохранить' : 'Добавить идею'}</button></div></form></Dialog>;
 }
 
-function SettingsView({ user, profile, partner, avatars, couple, theme, palette, onAppearance, onProfile, onAvatar, onInvite, onSignOut, tags, onAddTag, onDeleteTag, importantDates, onAddDate, onDeleteDate, onImport, onExport, events, installPrompt, onInstall, onNotice, vapidPublicKey, openExport, onExportOpened }: {
-  user: User; profile?: Profile; partner?: Profile; avatars: Record<string, string>; couple: CoupleInfo; theme: ThemeMode; palette: PaletteId;
-  onAppearance: (theme: ThemeMode, palette: PaletteId) => Promise<void>; onProfile: (name: string) => Promise<void>; onAvatar: (file: File | null) => Promise<void>; openExport: boolean; onExportOpened: () => void;
+function SettingsView({ user, profile, partner, avatars, couple, theme, palette, myEventColor, partnerEventColor, onAppearance, onProfile, onAvatar, onInvite, onSignOut, tags, onAddTag, onDeleteTag, importantDates, onAddDate, onDeleteDate, onImport, onExport, events, installPrompt, onInstall, onNotice, vapidPublicKey, openExport, onExportOpened }: {
+  user: User; profile?: Profile; partner?: Profile; avatars: Record<string, string>; couple: CoupleInfo; theme: ThemeMode; palette: PaletteId; myEventColor: string | null; partnerEventColor: string | null;
+  onAppearance: (theme: ThemeMode, palette: PaletteId, myColor: string | null, partnerColor: string | null) => Promise<void>; onProfile: (name: string) => Promise<void>; onAvatar: (file: File | null) => Promise<void>; openExport: boolean; onExportOpened: () => void;
   onInvite: () => Promise<string>; onSignOut: () => Promise<void>; tags: TagRow[]; onAddTag: (label: string, color: string) => Promise<void>; onDeleteTag: (tag: TagRow) => Promise<void>;
   importantDates: ImportantDate[]; onAddDate: (title: string, date: string, repeats: boolean, reminderDays: number) => Promise<void>; onDeleteDate: (item: ImportantDate) => Promise<void>;
   onImport: (file: File) => Promise<void>; onExport: (from: Date, to: Date, allowed: Visibility[]) => void; events: CalendarEvent[]; installPrompt: boolean; onInstall: () => void; onNotice: (text: string, kind?: 'success' | 'error' | 'info') => void; vapidPublicKey: string;
@@ -851,7 +875,10 @@ function SettingsView({ user, profile, partner, avatars, couple, theme, palette,
   const [tagName, setTagName] = useState(''); const [tagColor, setTagColor] = useState('#a6e3b0'); const [tagBusy, setTagBusy] = useState(false);
   const [dateDialog, setDateDialog] = useState(false); const [exportDialog, setExportDialog] = useState(false); const [appearanceBusy, setAppearanceBusy] = useState(false); const [reminderPermission, setReminderPermission] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   const [pushState, setPushState] = useState<'checking' | 'enabled' | 'disabled' | 'not-saved' | 'unsupported'>('checking'); const [pushBusy, setPushBusy] = useState(false);
+  const defaultColors = defaultCalendarColors(theme, palette);
+  const [eventColorDraft, setEventColorDraft] = useState({ mine: myEventColor ?? defaultColors[0], partner: partnerEventColor ?? defaultColors[1] });
   useEffect(() => setDisplayName(profile?.display_name ?? ''), [profile?.display_name]);
+  useEffect(() => setEventColorDraft({ mine: myEventColor ?? defaultColors[0], partner: partnerEventColor ?? defaultColors[1] }), [theme, palette, myEventColor, partnerEventColor]);
   useEffect(() => { if (openExport) { setExportDialog(true); onExportOpened(); } }, [openExport, onExportOpened]);
   useEffect(() => {
     let live = true;
@@ -870,10 +897,10 @@ function SettingsView({ user, profile, partner, avatars, couple, theme, palette,
     void check(); return () => { live = false; };
   }, [user.id]);
   async function saveName(event: FormEvent) { event.preventDefault(); setProfileBusy(true); try { await onProfile(displayName.trim()); } catch (cause) { onNotice(errorMessage(cause), 'error'); } finally { setProfileBusy(false); } }
-  async function saveAppearance(nextTheme: ThemeMode, nextPalette: PaletteId) {
+  async function saveAppearance(nextTheme: ThemeMode, nextPalette: PaletteId, nextMine = myEventColor, nextPartner = partnerEventColor) {
     if (appearanceBusy) return;
     setAppearanceBusy(true);
-    try { await onAppearance(nextTheme, nextPalette); }
+    try { await onAppearance(nextTheme, nextPalette, nextMine, nextPartner); }
     catch (cause) { onNotice(`Не удалось сохранить оформление: ${errorMessage(cause)}`, 'error'); }
     finally { setAppearanceBusy(false); }
   }
@@ -944,6 +971,10 @@ function SettingsView({ user, profile, partner, avatars, couple, theme, palette,
       <section className="settings-card panel appearance-settings"><div className="settings-card-heading"><span className="small-icon lavender"><Palette size={16} /></span><div><h3>Оформление</h3><p>Настраивается отдельно для вашего аккаунта и синхронизируется между вашими устройствами.</p></div></div>
         <div className="appearance-group"><b>Режим</b><div className="theme-options">{[{ id: 'dark' as const, label: 'Тёмная', icon: Moon }, { id: 'light' as const, label: 'Светлая', icon: Sun }, { id: 'system' as const, label: 'Системная', icon: Settings2 }].map(({ id, label, icon: Icon }) => <button key={id} disabled={appearanceBusy} className={`theme-option ${theme === id ? 'active' : ''}`} onClick={() => void saveAppearance(id, palette)}><Icon size={17} /><span>{label}</span>{theme === id && <Check size={15} />}</button>)}</div></div>
         <div className="appearance-group"><div className="appearance-group-title"><b>Цветовая палитра</b>{appearanceBusy && <LoaderCircle size={14} className="spin" aria-label="Сохраняем оформление" />}</div><div className="palette-options">{palettes.map((item) => <button type="button" key={item.id} disabled={appearanceBusy} aria-pressed={palette === item.id} className={`palette-option ${palette === item.id ? 'active' : ''}`} onClick={() => void saveAppearance(theme, item.id)}><span className="palette-swatches">{item.swatches.map((color) => <i key={color} style={{ backgroundColor: color }} />)}</span><span>{item.label}</span>{palette === item.id && <Check size={13} />}</button>)}</div></div>
+        <div className="appearance-group"><div className="appearance-group-title"><b>Цвета событий</b></div><p className="appearance-copy">Можно выбрать любой оттенок отдельно для себя и партнёра. Выберите оба цвета и сохраните их вместе.</p><div className="event-color-pickers">
+          <label className="event-color-picker"><input type="color" aria-label="Цвет моих событий" value={eventColorDraft.mine} disabled={appearanceBusy} onChange={(e) => setEventColorDraft((current) => ({ ...current, mine: e.target.value }))} /><span><b>Мои события</b><small>{eventColorDraft.mine.toUpperCase()}</small></span></label>
+          <label className="event-color-picker"><input type="color" aria-label="Цвет событий партнёра" value={eventColorDraft.partner} disabled={appearanceBusy} onChange={(e) => setEventColorDraft((current) => ({ ...current, partner: e.target.value }))} /><span><b>Партнёра</b><small>{eventColorDraft.partner.toUpperCase()}</small></span></label>
+        </div><div className="event-color-actions"><button className="button button-primary" disabled={appearanceBusy || (eventColorDraft.mine === (myEventColor ?? defaultColors[0]) && eventColorDraft.partner === (partnerEventColor ?? defaultColors[1]))} onClick={() => void saveAppearance(theme, palette, eventColorDraft.mine, eventColorDraft.partner)}>{appearanceBusy ? <LoaderCircle size={15} className="spin" /> : <Check size={15} />} Сохранить оба цвета</button><button className="text-button" disabled={appearanceBusy || (!myEventColor && !partnerEventColor)} onClick={() => void saveAppearance(theme, palette, null, null)}>Цвета палитры</button></div></div>
       </section>
 
       <section className="settings-card panel"><div className="settings-card-heading"><span className="small-icon amber"><Bell size={16} /></span><div><h3>Напоминания</h3><p>Push может приходить, когда приложение закрыто, после настройки Supabase.</p></div></div><div className="permission-row"><span className={`permission-indicator ${reminderPermission === 'granted' ? 'allowed' : ''}`} />Разрешение браузера: {reminderPermission === 'granted' ? 'получено' : reminderPermission === 'denied' ? 'запрещено в настройках сайта' : reminderPermission === 'unsupported' ? 'не поддерживается' : 'не запрашивалось'}</div><div className="permission-row"><span className={`permission-indicator ${pushState === 'enabled' ? 'allowed' : ''}`} />Подписка на этом устройстве: {pushState === 'checking' ? 'проверяем…' : pushState === 'enabled' ? 'включена' : pushState === 'not-saved' ? 'не сохранена в Supabase' : pushState === 'unsupported' ? 'не поддерживается этим браузером' : 'выключена'}</div>{pushState === 'enabled' ? <button className="button button-secondary" disabled={pushBusy} onClick={() => void disablePush()}>{pushBusy ? <LoaderCircle size={15} className="spin" /> : <Bell size={15} />} Выключить push на этом устройстве</button> : <button className="button button-primary" disabled={pushBusy || pushState === 'checking' || pushState === 'unsupported'} onClick={() => void enablePush()}>{pushBusy ? <LoaderCircle size={15} className="spin" /> : <Bell size={15} />} Включить push на этом устройстве</button>}{!vapidPublicKey && <p className="settings-hint">Сборка сайта пока не получила публичный VAPID-ключ. Администратору нужно выполнить шаги из раздела «Push-уведомления» в инструкции.</p>}<p className="settings-hint">Каждый участник включает push на своём телефоне отдельно. Уведомления требуют интернета, разрешения браузера и настроенного Supabase; система может задержать доставку. Простые уведомления только в открытой вкладке продолжают работать без push-подписки.</p></section>
