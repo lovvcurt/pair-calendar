@@ -17,7 +17,7 @@ type TelegramWebApp = {
 };
 
 type TelegramLoginResult = { id_token?: string; error?: string };
-type TelegramLoginOptions = { client_id: number; scope: string[]; lang: string; nonce: string };
+type TelegramLoginOptions = { client_id: number; scope: string[]; lang: string; nonce: string; redirect_uri: string };
 type TelegramLoginSdk = { auth: (options: TelegramLoginOptions, callback: (result: TelegramLoginResult) => void) => void };
 
 declare global {
@@ -58,14 +58,14 @@ export function loadTelegramLoginSdk(): Promise<void> {
 }
 
 /** Open Telegram's official popup. Call directly from a button click so browsers allow the popup. */
-export function openTelegramLogin(clientId: string, nonce: string): Promise<string> {
+export function openTelegramLogin(clientId: string, nonce: string, redirectUri: string): Promise<string> {
   const sdk = window.Telegram?.Login;
   const parsedClientId = Number(clientId);
   if (!sdk?.auth || !Number.isSafeInteger(parsedClientId) || parsedClientId <= 0) {
     return Promise.reject(new Error('Вход через Telegram на сайте ещё не настроен.'));
   }
   return new Promise((resolve, reject) => {
-    sdk.auth({ client_id: parsedClientId, scope: ['profile'], lang: 'ru', nonce }, (result) => {
+    sdk.auth({ client_id: parsedClientId, scope: ['profile'], lang: 'ru', nonce, redirect_uri: redirectUri }, (result) => {
       if (result.error) reject(new Error('Telegram не подтвердил вход. Закройте окно и попробуйте снова.'));
       else if (typeof result.id_token !== 'string' || !result.id_token) reject(new Error('Telegram не вернул подтверждение входа. Попробуйте ещё раз.'));
       else resolve(result.id_token);
